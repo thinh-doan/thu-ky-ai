@@ -8,6 +8,9 @@ import requests
 import streamlit as st
 from pages.confirm_action import confirm_action
 from navigation import render_stepper, stepper_css
+from scheduling.models import SchedulingRequest, UserProfile
+from scheduling.repository import PostgresRepository
+from scheduling.service import SchedulingService
 
 N8N_WEBHOOK_URL = "https://k25416-thukyai.app.n8n.cloud/webhook/ai-secretary"
 
@@ -75,10 +78,66 @@ today = date.today()
 ss.setdefault("cons", {"start": today, "end": today + timedelta(days=6), "tod": ["Morning"],
                        "avoid": ["Sun"], "buffer": 15})
 ss.setdefault("seed", 0)
+ss.setdefault("calendar_source", "demo")
+ss.setdefault("calendar_warning", None)
+ss.setdefault("calendar_busy_events", None)
+ss.setdefault("user_profile", None)
+
+
+def _request_for(title, minutes, event_type="personal"):
+    c = ss.cons
+    return SchedulingRequest(
+        title=title,
+        duration_minutes=minutes,
+        start_date=c["start"],
+        end_date=c["end"],
+        preferred_period=(c["tod"] or ["any"])[0].lower(),
+        event_type=event_type,
+        min_buffer_minutes=c["buffer"],
+        max_results=MAX_SLOTS,
+    )
+
+
+def _get_profile():
+    if ss.user_profile is not None:
+        return ss.user_profile
+    default = UserProfile(
+        habit_hours={"study": (9.0, 14.0), "personal": (17.0, 19.0)}
+    )
+    repository = PostgresRepository()
+    if repository.configured:
+        repository.ensure_schema()
+        stored = repository.load_profile("student@gmail.com")
+        ss.user_profile = UserProfile(
+            habit_hours={**default.habit_hours, **stored.habit_hours},
+            reschedule_rate=stored.reschedule_rate,
+        )
+    else:
+        ss.user_profile = default
+    return ss.user_profile
+
+
+def _load_calendar_events():
+    if ss.calendar_busy_events is not None:
+        return ss.calendar_busy_events
+    request = _request_for("availability check", 30)
+    service = SchedulingService(profile=_get_profile())
+    busy, source, warning = service.get_busy_events(request)
+    if warning:
+        ss.calendar_source = "demo"
+        ss.calendar_warning = warning
+        ss.calendar_busy_events = []
+        return []
+    ss.calendar_source = source
+    ss.calendar_warning = None
+    ss.calendar_busy_events = busy
+    return busy
 
 
 def make_slots(idx, n):
     if BACKEND_PROPOSALS:
+        _load_calendar_events()
+    if BACKEND_PROPOSALS and ss.calendar_source != "google_calendar":
         slots = []
         for proposal in BACKEND_PROPOSALS[:n]:
             try:
@@ -97,6 +156,25 @@ def make_slots(idx, n):
             })
         return slots
     c = ss.cons
+    request = _request_for(FLEX[idx][0], FLEX[idx][1], "study" if idx == 0 else "personal")
+    busy_events = _load_calendar_events()
+    if ss.calendar_source == "google_calendar":
+        service = SchedulingService(profile=_get_profile())
+        result = service.recommend(request, busy_events)
+        return [
+            {
+                "day": slot.start.date(),
+                "start": slot.start.hour + slot.start.minute / 60,
+                "end": slot.end.hour + slot.end.minute / 60,
+                "reasons": list(slot.reasons),
+                "rainy": False,
+                "minutes": int((slot.end - slot.start).total_seconds() // 60),
+                "slot_code": slot.slot_code,
+                "score": slot.score,
+                "score_breakdown": slot.score_breakdown,
+            }
+            for slot in result.slots[:n]
+        ]
     hours = [h for t in (c["tod"] or list(WINDOWS)) for h in WINDOWS[t]]
     minutes = FLEX[idx][1]
     slots, day = [], max(c["start"], today)
@@ -134,12 +212,28 @@ def regenerate():
                "end": ss.c_dates[1] if len(ss.c_dates) == 2 else today + timedelta(days=6),
                "tod": ss.c_tod, "avoid": ss.c_avoid, "buffer": ss.c_buffer}
     ss.seed += 1
+    ss.calendar_busy_events = None
+    ss.calendar_source = "demo"
+    ss.calendar_warning = None
     st.toast("Đã cập nhật gợi ý", icon="🔄")
 
 
 def reset():
     for k in ("results", "reconnected", "celebrated"):
         ss.pop(k, None)
+
+
+def persist_selected_feedback(events):
+    repository = PostgresRepository()
+    if not repository.configured:
+        return
+    repository.ensure_schema()
+    for event in events:
+        start = datetime.fromisoformat(
+            f"{event['date_range_start']}T{event['specific_start_time']}"
+        )
+        event_type = "study" if event["title"].startswith("Học:") else "personal"
+        repository.record_feedback("student@gmail.com", event_type, start, "accepted")
 
 
 # ----------------------------- Sidebar ----------------------------- #
@@ -189,6 +283,13 @@ if "results" in ss:
 # ----------------------------- Màn hình chọn giờ ----------------------------- #
 st.subheader("Chọn khung giờ bạn thích")
 st.caption(f"Đã kiểm tra Google Calendar từ {ss.cons['start']:%d/%m} đến {ss.cons['end']:%d/%m}.")
+if ss.calendar_warning:
+    st.warning(
+        "Chưa đọc được Google Calendar; đang dùng dữ liệu demo để minh họa. "
+        f"Chi tiết: {ss.calendar_warning}"
+    )
+elif ss.calendar_source == "google_calendar":
+    st.success("Đã đọc lịch bận từ tất cả Google Calendar mà tài khoản có quyền xem.")
 
 left, right = st.columns([1, 2.3])
 
@@ -320,6 +421,8 @@ if kq == "yes":
                     ok = r.get("status") == "created"
                     ss.results.append({"title": t, "when": w, "ok": ok,
                                        "err": "" if ok else r.get("message", "Không tạo được sự kiện")})
+                if all(result["ok"] for result in ss.results):
+                    persist_selected_feedback(events_payload)
             else:
                 err_msg = resp_data.get("message", "Phản hồi không hợp lệ từ n8n") if isinstance(resp_data,
                                                                                                  dict) else str(
