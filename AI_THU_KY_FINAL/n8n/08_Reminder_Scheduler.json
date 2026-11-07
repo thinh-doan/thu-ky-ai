@@ -1,0 +1,4 @@
+{"name":"08_Reminder_Scheduler","nodes":[
+{"parameters":{"rule":{"interval":[{"field":"minutes","minutesInterval":15}]}},"id":"wf08-trigger","name":"Schedule Trigger","type":"n8n-nodes-base.scheduleTrigger","typeVersion":1.2,"position":[0,0]},
+{"parameters":{"jsCode":"return [{json:{operation:'process_due_reminders',native_google_calendar_reminders:true}}];"},"id":"wf08-audit","name":"Reminder Audit Contract","type":"n8n-nodes-base.code","typeVersion":2,"position":[260,0]}
+],"connections":{"Schedule Trigger":{"main":[[{"node":"Reminder Audit Contract","type":"main","index":0}]]}},"active":false,"settings":{"executionOrder":"v1"},"pinData":{},"tags":[]}
