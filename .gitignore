@@ -1,1 +1,3 @@
 workflows/
+_pycache_
+credentials.json

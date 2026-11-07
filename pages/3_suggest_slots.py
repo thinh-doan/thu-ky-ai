@@ -86,15 +86,25 @@ ss.setdefault("user_profile", None)
 
 def _request_for(title, minutes, event_type="personal"):
     c = ss.cons
+    preferred_periods = {
+        "Morning": "morning",
+        "Afternoon": "afternoon",
+        "Evening": "evening",
+    }
+    selected_periods = [
+        preferred_periods[period]
+        for period in c["tod"]
+        if period in preferred_periods
+    ]
     return SchedulingRequest(
         title=title,
         duration_minutes=minutes,
         start_date=c["start"],
         end_date=c["end"],
-        preferred_period=(c["tod"] or ["any"])[0].lower(),
+        preferred_period=selected_periods[0] if len(selected_periods) == 1 else "any",
         event_type=event_type,
         min_buffer_minutes=c["buffer"],
-        max_results=MAX_SLOTS,
+        max_results=max(MAX_SLOTS * 4, 12),
     )
 
 
@@ -161,6 +171,16 @@ def make_slots(idx, n):
     if ss.calendar_source == "google_calendar":
         service = SchedulingService(profile=_get_profile())
         result = service.recommend(request, busy_events)
+        allowed_periods = {
+            "Morning": range(6, 12),
+            "Afternoon": range(12, 18),
+            "Evening": range(18, 22),
+        }
+        allowed_hours = {
+            hour
+            for period in (c["tod"] or list(WINDOWS))
+            for hour in allowed_periods.get(period, ())
+        }
         return [
             {
                 "day": slot.start.date(),
@@ -173,8 +193,10 @@ def make_slots(idx, n):
                 "score": slot.score,
                 "score_breakdown": slot.score_breakdown,
             }
-            for slot in result.slots[:n]
-        ]
+            for slot in result.slots
+            if slot.start.strftime("%a") not in c["avoid"]
+            and slot.start.hour in allowed_hours
+        ][:n]
     hours = [h for t in (c["tod"] or list(WINDOWS)) for h in WINDOWS[t]]
     minutes = FLEX[idx][1]
     slots, day = [], max(c["start"], today)

@@ -102,7 +102,6 @@ def reset():
 
 
 ss = st.session_state
-ss.setdefault("max_unlocked_step", 1)
 
 # ----------------------------- Sidebar ----------------------------- #
 with st.sidebar:
@@ -228,13 +227,9 @@ if go_text or go_img:
                     ss.request_kind = "image" if go_img else "text"
                     ss.pop("answered", None)
                     response_status = data.get("status") if isinstance(data, dict) else None
-                    image_statuses = ("import_ready", "success", "ok")
-                    text_statuses = ("proposals_ready", "success", "ok")
-                    if go_img and response_status in image_statuses:
-                        ss["max_unlocked_step"] = max(ss.get("max_unlocked_step", 1), 2)
+                    if go_img and response_status in ("import_ready", "success", "ok"):
                         st.switch_page("pages/2_review_edit.py")
-                    elif go_text and response_status in text_statuses:
-                        ss["max_unlocked_step"] = max(ss.get("max_unlocked_step", 1), 3)
+                    elif go_text and response_status in ("proposals_ready", "success", "ok"):
                         st.switch_page("pages/3_suggest_slots.py")
                 else:
                     stt.update(label="Lỗi xử lý!", state="error")

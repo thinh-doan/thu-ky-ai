@@ -110,22 +110,7 @@ with st.sidebar:
     st.success("🟢 Đã kết nối **student@gmail.com**")
     st.divider()
     st.caption("🧪 Điều khiển demo")
-    _variant_options = ["Ảnh thời khóa biểu", "Tạo sự kiện", "Sửa sự kiện", "Xóa sự kiện"]
-    _intent = st.session_state.get("resp", {}).get("intent") if isinstance(st.session_state.get("resp"), dict) else None
-    _intent_to_variant = {
-        "import_schedule_image": "Ảnh thời khóa biểu",
-        "create_event": "Tạo sự kiện",
-        "update_event": "Sửa sự kiện",
-        "delete_event": "Xóa sự kiện",
-    }
-    _default_variant = _intent_to_variant.get(
-        _intent,
-        "Ảnh thời khóa biểu" if st.session_state.get("request_kind") == "image" else "Tạo sự kiện",
-    )
-    variant = st.radio(
-        "Xem trước", _variant_options,
-        index=_variant_options.index(_default_variant),
-    )
+    variant = st.radio("Xem trước", ["Ảnh thời khóa biểu", "Tạo sự kiện", "Sửa sự kiện", "Xóa sự kiện"])
     sample_img = st.file_uploader("Ảnh thời khóa biểu của bạn (tùy chọn)", type=["png", "jpg", "jpeg"])
 
 st.markdown('<div class="hero"><h2>🗓️ AI Secretary</h2><p>Kiểm tra những gì tôi đã hiểu trước khi tiếp tục.</p></div>',
@@ -338,7 +323,6 @@ if kq == "yes":
             if res.status_code == 200:
                 st.success("Đã xác nhận với Workflow thành công!")
                 if variant in ("Tạo sự kiện", "Ảnh thời khóa biểu"):
-                    st.session_state["max_unlocked_step"] = max(st.session_state.get("max_unlocked_step", 1), 3)
                     st.switch_page("pages/3_suggest_slots.py")
             else:
                 st.error(f"Lỗi n8n ({res.status_code}): {res.text}")
