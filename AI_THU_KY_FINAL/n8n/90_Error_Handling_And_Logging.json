@@ -1,0 +1,5 @@
+{"name":"90_Error_Handling_And_Logging","nodes":[
+{"parameters":{},"id":"wf90-error","name":"Error Trigger","type":"n8n-nodes-base.errorTrigger","typeVersion":1,"position":[0,0]},
+{"parameters":{"inputSource":"passthrough"},"id":"wf90-trigger","name":"Execute Workflow Trigger","type":"n8n-nodes-base.executeWorkflowTrigger","typeVersion":1.1,"position":[0,220]},
+{"parameters":{"jsCode":"const x=$input.first().json; const e=x.execution||{}; return [{json:{operation:'log_session',status:'error',request_id:x.request_id||null,user_id:x.user_id||null,workflow_id:x.workflow?.id||null,failed_node:e.lastNodeExecuted||x.failed_node||null,error_message:String(x.message||e.error?.message||'Unknown workflow error').slice(0,2000),occurred_at:new Date().toISOString()}}];"},"id":"wf90-normalize","name":"Normalize Error","type":"n8n-nodes-base.code","typeVersion":2,"position":[300,100]}
+],"connections":{"Error Trigger":{"main":[[{"node":"Normalize Error","type":"main","index":0}]]},"Execute Workflow Trigger":{"main":[[{"node":"Normalize Error","type":"main","index":0}]]}},"active":false,"settings":{"executionOrder":"v1"},"pinData":{},"tags":[]}

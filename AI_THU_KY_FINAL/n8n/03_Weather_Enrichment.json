@@ -1,0 +1,9 @@
+{
+  "name":"03_Weather_Enrichment",
+  "nodes":[
+    {"parameters":{"inputSource":"passthrough"},"id":"wf03-trigger","name":"Execute Workflow Trigger","type":"n8n-nodes-base.executeWorkflowTrigger","typeVersion":1.1,"position":[0,0]},
+    {"parameters":{"jsCode":"const input=$input.first().json; if (!input.is_outdoor) return [{json:{...input,weather_data:[]}}]; return [{json:{...input,weather_data:Array.isArray(input.weather_data)?input.weather_data:[],weather_required:true}}];"},"id":"wf03-normalize","name":"Normalize Weather Data","type":"n8n-nodes-base.code","typeVersion":2,"position":[280,0]}
+  ],
+  "connections":{"Execute Workflow Trigger":{"main":[[{"node":"Normalize Weather Data","type":"main","index":0}]]}},
+  "active":false,"settings":{"executionOrder":"v1"},"pinData":{},"tags":[]
+}

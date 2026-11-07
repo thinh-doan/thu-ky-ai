@@ -1,0 +1,359 @@
+{
+  "name": "01_AI_Parse_Request",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "01_AI_Parse_Request\n\nMục đích:\nPhân tích câu lệnh tiếng Việt và trả JSON theo\nAI Secretary Data Contract v0.9.\n\nInput:\n{\n  user_id: string,\n  message: string\n}\n\nOutput:\n{\n  status: string,\n  intent: string,\n  event: object,\n  target_event: object,\n  missing_fields: array,\n  clarification_question: string | null,\n  requires_confirmation: boolean,\n  user_message: string\n}\n\nStatus hợp lệ:\nsuccess | needs_clarification | unsupported | error\n\nIntent hợp lệ:\ncreate_event\nfind_suitable_time\nview_events\nupdate_event\ndelete_event\ncheck_availability\nimport_schedule_image\nconfirm_action\ncancel_action\nunknown\n\nTimezone:\nAsia/Ho_Chi_Minh\n\nCredential:\ngooglePalmApi - Gemini REST\n\nData Contract:\nv0.9",
+        "height": 824,
+        "width": 600
+      },
+      "id": "9b2d30b9-8fbe-444b-8dde-813f7c5fa1c1",
+      "name": "Ghi chú",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "user_id"
+            },
+            {
+              "name": "message"
+            }
+          ]
+        },
+        "returnOutput": "allRuns"
+      },
+      "id": "fbcc7d6b-3f96-4303-a3a0-57db13401445",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        16,
+        912
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\nconst timezone = 'Asia/Ho_Chi_Minh';\nconst now = new Date();\n\n/*\n * Nhận câu lệnh từ các nguồn đầu vào phổ biến.\n * Workflow chỉ cần một trong các trường dưới đây có dữ liệu.\n */\nconst userMessage = String(\n  input.message ??\n  input.chatInput ??\n  input.user_request ??\n  input.text ??\n  'Đặt lịch họp dự án lúc 9 giờ sáng ngày 31/10/2026 trong một giờ.'\n).trim();\n\nif (!userMessage) {\n  throw new Error(\n    'Không tìm thấy câu lệnh người dùng. ' +\n    'Cần truyền một trong các trường: message, chatInput, user_request hoặc text.'\n  );\n}\n\n/*\n * Lấy ngày giờ hiện tại theo múi giờ Việt Nam.\n */\nconst currentDateTime = now.toLocaleString('sv-SE', {\n  timeZone: timezone,\n  hour12: false,\n});\n\nconst currentDate = now.toLocaleDateString('sv-SE', {\n  timeZone: timezone,\n});\n\nconst currentTime = now.toLocaleTimeString('sv-SE', {\n  timeZone: timezone,\n  hour12: false,\n});\n\nconst weekday = now.toLocaleDateString('vi-VN', {\n  weekday: 'long',\n  timeZone: timezone,\n});\n\n/*\n * System Prompt của AI Secretary.\n */\nconst systemPrompt = `\nVAI TRÒ\n\nBạn là thành phần phân tích yêu cầu của hệ thống AI Secretary.\nBạn hỗ trợ sinh viên và nhân viên văn phòng quản lý thời gian và lịch trình.\n\nNhiệm vụ duy nhất của bạn là phân tích yêu cầu bằng tiếng Việt và trả về\nMỘT đối tượng JSON hợp lệ theo AI Secretary Data Contract v0.9.\n\nKhông trả Markdown.\nKhông đặt JSON trong dấu ba dấu nháy.\nKhông thêm lời chào hoặc giải thích bên ngoài JSON.\n\nTHÔNG TIN HỆ THỐNG\n\nNgày hiện tại: ${currentDate}\nThời gian hiện tại: ${currentTime}\nNgày trong tuần: ${weekday}\nMúi giờ: ${timezone}\n\nCÁC INTENT HỢP LỆ\n\n- create_event\n- find_suitable_time\n- view_events\n- update_event\n- delete_event\n- check_availability\n- import_schedule_image\n- confirm_action\n- cancel_action\n- unknown\n\nKhông được tạo thêm intent mới.\nKhông sử dụng find_free_time, add_event, remove_event hoặc other.\n\nCÁC STATUS HỢP LỆ\n\n- success\n- needs_clarification\n- unsupported\n- error\n\nQUY TẮC XÁC ĐỊNH INTENT\n\n1. Người dùng cung cấp ngày và giờ cụ thể để tạo lịch:\n   intent = create_event.\n\n2. Người dùng muốn hệ thống tự tìm thời gian phù hợp:\n   intent = find_suitable_time.\n\n3. Người dùng muốn xem các sự kiện:\n   intent = view_events.\n\n4. Người dùng chỉ muốn kiểm tra một khoảng thời gian có rảnh hay không:\n   intent = check_availability.\n\n5. Người dùng muốn thay đổi một sự kiện đã có:\n   intent = update_event.\n\n6. Người dùng muốn xóa hoặc hủy một sự kiện:\n   intent = delete_event.\n\n7. Người dùng muốn nhập lịch từ hình ảnh:\n   intent = import_schedule_image.\n\n8. Người dùng xác nhận hành động đang chờ:\n   intent = confirm_action.\n\n9. Người dùng hủy hành động đang chờ:\n   intent = cancel_action.\n\n10. Yêu cầu không rõ hoặc ngoài phạm vi quản lý lịch:\n    intent = unknown.\n\nMỗi yêu cầu chỉ được có một intent chính.\n\nQUY TẮC NGÀY VÀ GIỜ\n\n1. Ngày phải có định dạng YYYY-MM-DD.\n2. Giờ phải có định dạng 24 giờ HH:MM.\n3. Thời lượng phải được chuyển thành số phút.\n4. \"Hôm nay\" được tính từ ngày hiện tại.\n5. \"Ngày mai\" là ngày hiện tại cộng một ngày.\n6. \"Ngày kia\" là ngày hiện tại cộng hai ngày.\n7. \"Tuần này\" là từ ngày hiện tại đến hết Chủ nhật hiện tại.\n8. \"Tuần sau\" là từ thứ Hai đến Chủ nhật của tuần kế tiếp.\n9. Nếu người dùng chỉ nói \"7 giờ\" mà không rõ sáng hay tối, phải hỏi lại.\n10. Nếu người dùng nói một thứ nhưng không rõ tuần này hay tuần sau, phải hỏi lại.\n11. Không tự chọn ngày nếu người dùng chưa cung cấp.\n12. Không tự chọn thời lượng nếu người dùng chưa cung cấp.\n13. Không tự mặc định thời lượng là 60 phút.\n14. Không tự chọn khoảng bảy ngày nếu người dùng chưa cung cấp khoảng ngày.\n\nQUY ƯỚC CÁC BUỔI\n\n- morning: 06:00 đến 11:59.\n- afternoon: 13:30 đến 17:59.\n- evening: 18:00 đến 22:00.\n- any: người dùng chấp nhận mọi khoảng thời gian.\n- null: người dùng không đề cập buổi ưu tiên.\n\nNếu người dùng cung cấp giờ cụ thể, có thể xác định preferred_period tương ứng.\n\nQUY TẮC EVENT\n\nevent chứa dữ liệu sự kiện mới, hoạt động cần sắp xếp hoặc dữ liệu mới cần cập nhật.\n\nCác trường của event:\n\n- title: string hoặc null\n- description: string hoặc null\n- date_range_start: YYYY-MM-DD hoặc null\n- date_range_end: YYYY-MM-DD hoặc null\n- specific_start_time: HH:MM hoặc null\n- specific_end_time: HH:MM hoặc null\n- duration_minutes: số nguyên dương hoặc null\n- preferred_period: morning, afternoon, evening, any hoặc null\n- location: string hoặc null\n- is_outdoor: true, false hoặc null\n- avoid_rain: true hoặc false\n\nQuy tắc:\n\n1. Không tự tạo title.\n2. Không tự tạo description.\n3. Không tự tạo location.\n4. Không tự đặt duration_minutes.\n5. Nếu có giờ bắt đầu và giờ kết thúc, hãy tính duration_minutes.\n6. Nếu sự kiện diễn ra trong một ngày,\n   date_range_start và date_range_end phải giống nhau.\n7. Hoạt động chắc chắn ngoài trời thì is_outdoor = true.\n8. Hoạt động chắc chắn trong nhà thì is_outdoor = false.\n9. Không đủ thông tin để xác định thì is_outdoor = null.\n10. avoid_rain chỉ bằng true khi người dùng yêu cầu tránh mưa\n    hoặc đưa ra điều kiện tương đương.\n11. Nếu avoid_rain = true nhưng location = null,\n    phải yêu cầu người dùng bổ sung địa điểm.\n\nQUY TẮC TARGET_EVENT\n\ntarget_event chứa thông tin của sự kiện cũ cần tìm, sửa hoặc xóa.\n\nCác trường:\n\n- event_id: string hoặc null\n- title: string hoặc null\n- date: YYYY-MM-DD hoặc null\n- start_time: HH:MM hoặc null\n\nQuy tắc:\n\n1. AI không được tự tạo event_id.\n2. event_id chỉ được lấy từ Google Calendar hoặc cơ sở dữ liệu.\n3. Khi chưa truy xuất Calendar, event_id = null.\n4. target_event lưu thông tin cũ.\n5. event lưu thông tin mới cần cập nhật.\n6. Nếu chưa đủ thông tin để xác định sự kiện, phải hỏi lại.\n7. Nếu có thể có nhiều sự kiện phù hợp, không được tự chọn.\n\nDỮ LIỆU BẮT BUỘC\n\ncreate_event cần:\n\n- event.title\n- event.date_range_start\n- event.date_range_end\n- event.specific_start_time\n- event.specific_end_time hoặc event.duration_minutes\n\nfind_suitable_time cần:\n\n- event.title\n- event.date_range_start\n- event.date_range_end\n- event.duration_minutes\n\nNếu find_suitable_time có avoid_rain = true thì cần thêm:\n\n- event.location\n\nview_events cần:\n\n- event.date_range_start\n- event.date_range_end\n\ncheck_availability cần:\n\n- event.date_range_start\n- event.date_range_end\n- event.specific_start_time\n- event.specific_end_time hoặc event.duration_minutes\n\nupdate_event cần:\n\n- thông tin đủ để xác định sự kiện cũ trong target_event\n- ít nhất một giá trị mới trong event\n\ndelete_event cần:\n\n- thông tin đủ để xác định đúng sự kiện trong target_event\n\nQUY TẮC DỮ LIỆU THIẾU\n\n1. Đủ thông tin bắt buộc:\n   status = success.\n\n2. Thiếu thông tin bắt buộc:\n   status = needs_clarification.\n\n3. Yêu cầu ngoài phạm vi:\n   status = unsupported;\n   intent = unknown.\n\n4. Lỗi xử lý:\n   status = error.\n\n5. Các trường thiếu phải được ghi trong missing_fields.\n\n6. Tên trường thiếu phải dùng đường dẫn đầy đủ, ví dụ:\n   event.title\n   event.duration_minutes\n   event.location\n   target_event.date\n   target_event.start_time\n\n7. clarification_question phải ngắn gọn, tự nhiên và bằng tiếng Việt.\n\n8. Không sử dụng tên kỹ thuật như event.duration_minutes\n   trong câu hỏi cho người dùng.\n\nQUY TẮC XÁC NHẬN\n\n1. create_event đủ dữ liệu:\n   requires_confirmation = true.\n\n2. update_event đủ dữ liệu:\n   requires_confirmation = true.\n\n3. delete_event đủ dữ liệu:\n   requires_confirmation = true.\n\n4. find_suitable_time đang ở bước tìm giờ:\n   requires_confirmation = false.\n\n5. view_events:\n   requires_confirmation = false.\n\n6. check_availability:\n   requires_confirmation = false.\n\n7. needs_clarification:\n   requires_confirmation = false.\n\n8. unsupported hoặc error:\n   requires_confirmation = false.\n\n9. AI không được trực tiếp tạo, sửa hoặc xóa sự kiện.\n\nPHẠM VI CHƯA HỖ TRỢ\n\nPhiên bản hiện tại chưa hỗ trợ lịch lặp lại.\n\nNếu người dùng yêu cầu lịch lặp hằng ngày, hằng tuần hoặc theo chu kỳ:\n\n- status = unsupported\n- intent = unknown\n- requires_confirmation = false\n- user_message giải thích rằng phiên bản hiện tại chưa hỗ trợ lịch lặp\n\nKhông tạo trường recurrence.\n\nYÊU CẦU CUỐI CÙNG\n\n1. Chỉ trả về một đối tượng JSON.\n2. Luôn trả đủ tám trường cấp ngoài.\n3. Không đổi tên trường.\n4. Không thêm trường cấp ngoài mới.\n5. Không trả parsed_json.\n6. Không trả exact_start.\n7. Không trả query_date_end.\n8. Không trả recurrence.\n9. Không trả văn bản ngoài JSON.\n10. Các trường không có dữ liệu phải sử dụng null, false, đối tượng rỗng hoặc danh sách rỗng phù hợp.\n`.trim();\n\n/*\n * JSON Schema cho Gemini Structured Output.\n * Tất cả 8 trường cấp ngoài luôn phải xuất hiện.\n */\nconst responseSchema = {\n  type: 'object',\n  properties: {\n    status: {\n      type: 'string',\n      enum: [\n        'success',\n        'needs_clarification',\n        'unsupported',\n        'error',\n      ],\n    },\n\n    intent: {\n      type: 'string',\n      enum: [\n        'create_event',\n        'find_suitable_time',\n        'view_events',\n        'update_event',\n        'delete_event',\n        'check_availability',\n        'import_schedule_image',\n        'confirm_action',\n        'cancel_action',\n        'unknown',\n      ],\n    },\n\n    event: {\n      type: 'object',\n      properties: {\n        title: {\n          type: 'string',\n          nullable: true,\n        },\n\n        description: {\n          type: 'string',\n          nullable: true,\n        },\n\n        date_range_start: {\n          type: 'string',\n          nullable: true,\n          description: 'Ngày định dạng YYYY-MM-DD.',\n        },\n\n        date_range_end: {\n          type: 'string',\n          nullable: true,\n          description: 'Ngày định dạng YYYY-MM-DD.',\n        },\n\n        specific_start_time: {\n          type: 'string',\n          nullable: true,\n          description: 'Giờ định dạng HH:MM theo 24 giờ.',\n        },\n\n        specific_end_time: {\n          type: 'string',\n          nullable: true,\n          description: 'Giờ định dạng HH:MM theo 24 giờ.',\n        },\n\n        duration_minutes: {\n          type: 'integer',\n          nullable: true,\n          minimum: 1,\n        },\n\n        preferred_period: {\n          type: 'string',\n          nullable: true,\n          enum: [\n            'morning',\n            'afternoon',\n            'evening',\n            'any',\n          ],\n        },\n\n        location: {\n          type: 'string',\n          nullable: true,\n        },\n\n        is_outdoor: {\n          type: 'boolean',\n          nullable: true,\n        },\n\n        avoid_rain: {\n          type: 'boolean',\n        },\n      },\n\n      required: [\n        'title',\n        'description',\n        'date_range_start',\n        'date_range_end',\n        'specific_start_time',\n        'specific_end_time',\n        'duration_minutes',\n        'preferred_period',\n        'location',\n        'is_outdoor',\n        'avoid_rain',\n      ],\n    },\n\n    target_event: {\n      type: 'object',\n      properties: {\n        event_id: {\n          type: 'string',\n          nullable: true,\n        },\n\n        title: {\n          type: 'string',\n          nullable: true,\n        },\n\n        date: {\n          type: 'string',\n          nullable: true,\n          description: 'Ngày định dạng YYYY-MM-DD.',\n        },\n\n        start_time: {\n          type: 'string',\n          nullable: true,\n          description: 'Giờ định dạng HH:MM theo 24 giờ.',\n        },\n      },\n\n      required: [\n        'event_id',\n        'title',\n        'date',\n        'start_time',\n      ],\n    },\n\n    missing_fields: {\n      type: 'array',\n      items: {\n        type: 'string',\n      },\n    },\n\n    clarification_question: {\n      type: 'string',\n      nullable: true,\n    },\n\n    requires_confirmation: {\n      type: 'boolean',\n    },\n\n    user_message: {\n      type: 'string',\n    },\n  },\n\n  required: [\n    'status',\n    'intent',\n    'event',\n    'target_event',\n    'missing_fields',\n    'clarification_question',\n    'requires_confirmation',\n    'user_message',\n  ],\n};\n\n/*\n * Request body gửi đến Gemini Generate Content API.\n */\nconst body = {\n  systemInstruction: {\n    parts: [\n      {\n        text: systemPrompt,\n      },\n    ],\n  },\n\n  contents: [\n    {\n      role: 'user',\n      parts: [\n        {\n          text: userMessage,\n        },\n      ],\n    },\n  ],\n\n  generationConfig: {\n    temperature: 0.1,\n    responseMimeType: 'application/json',\n    responseSchema,\n  },\n};\n\n/*\n * Dữ liệu đầu ra của Code node.\n */\nreturn [\n  {\n    json: {\n      user_id: String(input.user_id ?? ''),\n      message: userMessage,\n      current_datetime: currentDateTime,\n      current_date: currentDate,\n      current_time: currentTime,\n      weekday,\n      timezone,\n      llm_provider: 'Google',\n      llm_model: 'gemini-3.6-flash',\n      data_contract_version: '0.9',\n      gemini_body: body,\n    },\n  },\n];"
+      },
+      "id": "493dae9e-eebe-4b06-9ccf-2d6c67d61cab",
+      "name": "Build Gemini Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        912
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{ $json.llm_model }}:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.gemini_body }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "91404fbf-7432-4099-8d67-d5b74a7a775a",
+      "name": "Gemini Generate Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        544,
+        928
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "EJ2O6gWKVeh2qweq",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const meta = $('Build Gemini Request').first().json;\nconst res = $input.first().json;\nconst base = { user_id: meta.user_id, message: meta.message };\n\nconst fail = (msg) => {\n  const parsed = { status: 'error', intent: 'unknown', error_message: msg };\n  return [{ json: { ...base, status: 'error', intent: 'unknown', error_message: msg, parsed_json: parsed } }];\n};\n\nif (res.error) {\n  const m = typeof res.error === 'string' ? res.error : (res.error.message || JSON.stringify(res.error));\n  return fail('Loi goi Gemini: ' + m);\n}\n\ntry {\n  const text = (res?.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');\n  if (!text) return fail('Gemini tra ve noi dung rong');\n  const p = JSON.parse(text.replace(/```json|```/g, '').trim());\n\n  // Chuẩn hóa status: Gemini v0.9 trả về 'success' -> đổi thành 'ok' để tương thích Main Orchestrator\n  const rawStatus = p.status || 'error';\n  const status = (rawStatus === 'success' || rawStatus === 'ok') ? 'ok' : rawStatus;\n\n  const event = p.event || {};\n  const today = meta.current_date || new Date().toISOString().slice(0, 10);\n  const addDays = (ymd, n) => new Date(new Date(ymd + 'T00:00:00Z').getTime() + n * 86400000).toISOString().slice(0, 10);\n  const isDate = (s) => typeof s === 'string' && /^\\d{4}-\\d{2}-\\d{2}$/.test(s);\n\n  // Đọc dữ liệu từ đối tượng event theo Data Contract v0.9\n  const title = (event.title && String(event.title).trim()) || String(meta.message || '').slice(0, 100);\n  const duration_minutes = Math.min(480, Math.max(15, Number.parseInt(event.duration_minutes, 10) || 60));\n  const date_range_start = isDate(event.date_range_start) ? event.date_range_start : today;\n  let date_range_end = isDate(event.date_range_end) ? event.date_range_end : addDays(today, 6);\n  if (date_range_end < date_range_start) date_range_end = date_range_start;\n\n  const PERIOD = ['morning', 'afternoon', 'evening', 'any'];\n  const preferred_period = PERIOD.includes(event.preferred_period) ? event.preferred_period : 'any';\n\n  // Chuẩn hóa intent để Main Orchestrator nhận diện luồng sắp xếp lịch\n  let intent = p.intent || 'unknown';\n  if (intent === 'find_suitable_time') {\n    intent = 'create_event'; // Đưa về chung luồng tạo/tìm lịch trống với Main Orchestrator\n  }\n\n  const out = {\n    status: ['ok', 'needs_clarification', 'unsupported', 'error'].includes(status) ? status : 'error',\n    intent: intent,\n    title,\n    duration_minutes,\n    date_range_start,\n    date_range_end,\n    preferred_period,\n    is_outdoor: typeof event.is_outdoor === 'boolean' ? event.is_outdoor : null,\n    avoid_rain: event.avoid_rain === true,\n    location: event.location ? String(event.location) : null,\n    clarification_question: p.clarification_question ? String(p.clarification_question) : null,\n    parsed_json: p\n  };\n\n  return [{ json: { ...base, ...out } }];\n} catch (e) {\n  return fail('Khong parse duoc JSON tu Gemini: ' + e.message);\n}"
+      },
+      "id": "d760bf2e-1581-4641-a99b-d4991e90a44a",
+      "name": "Parse AI Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        912
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 4
+          },
+          "conditions": [
+            {
+              "id": "6ae3534f-412c-4928-8b24-fb3ea064f6db",
+              "leftValue": "={{ Boolean(!$json.error && Array.isArray($json.candidates) && $json.candidates.length > 0) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        1024,
+        2272
+      ],
+      "id": "beb07657-3b98-4153-979a-f193734c46c5",
+      "name": "Gemini OK?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "groqApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer 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"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "=json",
+        "bodyParameters": {
+          "parameters": [
+            {}
+          ]
+        },
+        "jsonBody": "=={{ { ...$('Build Gemini Request1').first().json.groq_body, model: \"openai/gpt-oss-20b\" } }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1168,
+        2464
+      ],
+      "id": "abe74df3-b940-4301-8cac-5f17dffc7793",
+      "name": "Groq Generate Content",
+      "retryOnFail": true,
+      "credentials": {
+        "groqApi": {
+          "id": "xSRdgyuXxiG1oDCL",
+          "name": "Groq account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "content": "01_AI_Parse_Request\n\nMục đích:\nPhân tích câu lệnh tiếng Việt và trả JSON theo\nAI Secretary Data Contract v0.9.\n\nInput:\n{\n  user_id: string,\n  message: string\n}\n\nOutput:\n{\n  status: string,\n  intent: string,\n  event: object,\n  target_event: object,\n  missing_fields: array,\n  clarification_question: string | null,\n  requires_confirmation: boolean,\n  user_message: string\n}\n\nStatus hợp lệ:\nsuccess | needs_clarification | unsupported | error\n\nIntent hợp lệ:\ncreate_event\nfind_suitable_time\nview_events\nupdate_event\ndelete_event\ncheck_availability\nimport_schedule_image\nconfirm_action\ncancel_action\nunknown\n\nTimezone:\nAsia/Ho_Chi_Minh\n\nCredential:\ngooglePalmApi - Gemini REST (chính)\ngroqApi - Groq llama-3.3-70b-versatile (dự phòng khi Gemini lỗi)\n\nData Contract:\nv0.9",
+        "height": 824,
+        "width": 600
+      },
+      "id": "9bfc789a-d573-4784-b420-8b7f3def32a6",
+      "name": "Ghi chú1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        544,
+        1408
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\nconst timezone = 'Asia/Ho_Chi_Minh';\nconst now = new Date();\n\n/*\n * Nhận câu lệnh từ các nguồn đầu vào phổ biến.\n * Workflow chỉ cần một trong các trường dưới đây có dữ liệu.\n */\nconst userMessage = String(\n  input.message ??\n  input.chatInput ??\n  input.user_request ??\n  input.text ??\n  'Đặt lịch họp dự án lúc 9 giờ sáng ngày 31/10/2026 trong một giờ.'\n).trim();\n\nif (!userMessage) {\n  throw new Error(\n    'Không tìm thấy câu lệnh người dùng. ' +\n    'Cần truyền một trong các trường: message, chatInput, user_request hoặc text.'\n  );\n}\n\n/*\n * Lấy ngày giờ hiện tại theo múi giờ Việt Nam.\n */\nconst currentDateTime = now.toLocaleString('sv-SE', {\n  timeZone: timezone,\n  hour12: false,\n});\n\nconst currentDate = now.toLocaleDateString('sv-SE', {\n  timeZone: timezone,\n});\n\nconst currentTime = now.toLocaleTimeString('sv-SE', {\n  timeZone: timezone,\n  hour12: false,\n});\n\nconst weekday = now.toLocaleDateString('vi-VN', {\n  weekday: 'long',\n  timeZone: timezone,\n});\n\n/*\n * System Prompt của AI Secretary.\n */\nconst systemPrompt = `\nVAI TRÒ\n\nBạn là thành phần phân tích yêu cầu của hệ thống AI Secretary.\nBạn hỗ trợ sinh viên và nhân viên văn phòng quản lý thời gian và lịch trình.\n\nNhiệm vụ duy nhất của bạn là phân tích yêu cầu bằng tiếng Việt và trả về\nMỘT đối tượng JSON hợp lệ theo AI Secretary Data Contract v0.9.\n\nKhông trả Markdown.\nKhông đặt JSON trong dấu ba dấu nháy.\nKhông thêm lời chào hoặc giải thích bên ngoài JSON.\n\nTHÔNG TIN HỆ THỐNG\n\nNgày hiện tại: ${currentDate}\nThời gian hiện tại: ${currentTime}\nNgày trong tuần: ${weekday}\nMúi giờ: ${timezone}\n\nCÁC INTENT HỢP LỆ\n\n- create_event\n- find_suitable_time\n- view_events\n- update_event\n- delete_event\n- check_availability\n- import_schedule_image\n- confirm_action\n- cancel_action\n- unknown\n\nKhông được tạo thêm intent mới.\nKhông sử dụng find_free_time, add_event, remove_event hoặc other.\n\nCÁC STATUS HỢP LỆ\n\n- success\n- needs_clarification\n- unsupported\n- error\n\nQUY TẮC XÁC ĐỊNH INTENT\n\n1. Người dùng cung cấp ngày và giờ cụ thể để tạo lịch:\n   intent = create_event.\n\n2. Người dùng muốn hệ thống tự tìm thời gian phù hợp:\n   intent = find_suitable_time.\n\n3. Người dùng muốn xem các sự kiện:\n   intent = view_events.\n\n4. Người dùng chỉ muốn kiểm tra một khoảng thời gian có rảnh hay không:\n   intent = check_availability.\n\n5. Người dùng muốn thay đổi một sự kiện đã có:\n   intent = update_event.\n\n6. Người dùng muốn xóa hoặc hủy một sự kiện:\n   intent = delete_event.\n\n7. Người dùng muốn nhập lịch từ hình ảnh:\n   intent = import_schedule_image.\n\n8. Người dùng xác nhận hành động đang chờ:\n   intent = confirm_action.\n\n9. Người dùng hủy hành động đang chờ:\n   intent = cancel_action.\n\n10. Yêu cầu không rõ hoặc ngoài phạm vi quản lý lịch:\n    intent = unknown.\n\nMỗi yêu cầu chỉ được có một intent chính.\n\nQUY TẮC NGÀY VÀ GIỜ\n\n1. Ngày phải có định dạng YYYY-MM-DD.\n2. Giờ phải có định dạng 24 giờ HH:MM.\n3. Thời lượng phải được chuyển thành số phút.\n4. \"Hôm nay\" được tính từ ngày hiện tại.\n5. \"Ngày mai\" là ngày hiện tại cộng một ngày.\n6. \"Ngày kia\" là ngày hiện tại cộng hai ngày.\n7. \"Tuần này\" là từ ngày hiện tại đến hết Chủ nhật hiện tại.\n8. \"Tuần sau\" là từ thứ Hai đến Chủ nhật của tuần kế tiếp.\n9. Nếu người dùng chỉ nói \"7 giờ\" mà không rõ sáng hay tối, phải hỏi lại.\n10. Nếu người dùng nói một thứ nhưng không rõ tuần này hay tuần sau, phải hỏi lại.\n11. Không tự chọn ngày nếu người dùng chưa cung cấp.\n12. Không tự chọn thời lượng nếu người dùng chưa cung cấp.\n13. Không tự mặc định thời lượng là 60 phút.\n14. Không tự chọn khoảng bảy ngày nếu người dùng chưa cung cấp khoảng ngày.\n\nQUY ƯỚC CÁC BUỔI\n\n- morning: 06:00 đến 11:59.\n- afternoon: 13:30 đến 17:59.\n- evening: 18:00 đến 22:00.\n- any: người dùng chấp nhận mọi khoảng thời gian.\n- null: người dùng không đề cập buổi ưu tiên.\n\nNếu người dùng cung cấp giờ cụ thể, có thể xác định preferred_period tương ứng.\n\nQUY TẮC EVENT\n\nevent chứa dữ liệu sự kiện mới, hoạt động cần sắp xếp hoặc dữ liệu mới cần cập nhật.\n\nCác trường của event:\n\n- title: string hoặc null\n- description: string hoặc null\n- date_range_start: YYYY-MM-DD hoặc null\n- date_range_end: YYYY-MM-DD hoặc null\n- specific_start_time: HH:MM hoặc null\n- specific_end_time: HH:MM hoặc null\n- duration_minutes: số nguyên dương hoặc null\n- preferred_period: morning, afternoon, evening, any hoặc null\n- location: string hoặc null\n- is_outdoor: true, false hoặc null\n- avoid_rain: true hoặc false\n\nQuy tắc:\n\n1. Không tự tạo title.\n2. Không tự tạo description.\n3. Không tự tạo location.\n4. Không tự đặt duration_minutes.\n5. Nếu có giờ bắt đầu và giờ kết thúc, hãy tính duration_minutes.\n6. Nếu sự kiện diễn ra trong một ngày,\n   date_range_start và date_range_end phải giống nhau.\n7. Hoạt động chắc chắn ngoài trời thì is_outdoor = true.\n8. Hoạt động chắc chắn trong nhà thì is_outdoor = false.\n9. Không đủ thông tin để xác định thì is_outdoor = null.\n10. avoid_rain chỉ bằng true khi người dùng yêu cầu tránh mưa\n    hoặc đưa ra điều kiện tương đương.\n11. Nếu avoid_rain = true nhưng location = null,\n    phải yêu cầu người dùng bổ sung địa điểm.\n\nQUY TẮC TARGET_EVENT\n\ntarget_event chứa thông tin của sự kiện cũ cần tìm, sửa hoặc xóa.\n\nCác trường:\n\n- event_id: string hoặc null\n- title: string hoặc null\n- date: YYYY-MM-DD hoặc null\n- start_time: HH:MM hoặc null\n\nQuy tắc:\n\n1. AI không được tự tạo event_id.\n2. event_id chỉ được lấy từ Google Calendar hoặc cơ sở dữ liệu.\n3. Khi chưa truy xuất Calendar, event_id = null.\n4. target_event lưu thông tin cũ.\n5. event lưu thông tin mới cần cập nhật.\n6. Nếu chưa đủ thông tin để xác định sự kiện, phải hỏi lại.\n7. Nếu có thể có nhiều sự kiện phù hợp, không được tự chọn.\n\nDỮ LIỆU BẮT BUỘC\n\ncreate_event cần:\n\n- event.title\n- event.date_range_start\n- event.date_range_end\n- event.specific_start_time\n- event.specific_end_time hoặc event.duration_minutes\n\nfind_suitable_time cần:\n\n- event.title\n- event.date_range_start\n- event.date_range_end\n- event.duration_minutes\n\nNếu find_suitable_time có avoid_rain = true thì cần thêm:\n\n- event.location\n\nview_events cần:\n\n- event.date_range_start\n- event.date_range_end\n\ncheck_availability cần:\n\n- event.date_range_start\n- event.date_range_end\n- event.specific_start_time\n- event.specific_end_time hoặc event.duration_minutes\n\nupdate_event cần:\n\n- thông tin đủ để xác định sự kiện cũ trong target_event\n- ít nhất một giá trị mới trong event\n\ndelete_event cần:\n\n- thông tin đủ để xác định đúng sự kiện trong target_event\n\nQUY TẮC DỮ LIỆU THIẾU\n\n1. Đủ thông tin bắt buộc:\n   status = success.\n\n2. Thiếu thông tin bắt buộc:\n   status = needs_clarification.\n\n3. Yêu cầu ngoài phạm vi:\n   status = unsupported;\n   intent = unknown.\n\n4. Lỗi xử lý:\n   status = error.\n\n5. Các trường thiếu phải được ghi trong missing_fields.\n\n6. Tên trường thiếu phải dùng đường dẫn đầy đủ, ví dụ:\n   event.title\n   event.duration_minutes\n   event.location\n   target_event.date\n   target_event.start_time\n\n7. clarification_question phải ngắn gọn, tự nhiên và bằng tiếng Việt.\n\n8. Không sử dụng tên kỹ thuật như event.duration_minutes\n   trong câu hỏi cho người dùng.\n\nQUY TẮC XÁC NHẬN\n\n1. create_event đủ dữ liệu:\n   requires_confirmation = true.\n\n2. update_event đủ dữ liệu:\n   requires_confirmation = true.\n\n3. delete_event đủ dữ liệu:\n   requires_confirmation = true.\n\n4. find_suitable_time đang ở bước tìm giờ:\n   requires_confirmation = false.\n\n5. view_events:\n   requires_confirmation = false.\n\n6. check_availability:\n   requires_confirmation = false.\n\n7. needs_clarification:\n   requires_confirmation = false.\n\n8. unsupported hoặc error:\n   requires_confirmation = false.\n\n9. AI không được trực tiếp tạo, sửa hoặc xóa sự kiện.\n\nPHẠM VI CHƯA HỖ TRỢ\n\nPhiên bản hiện tại chưa hỗ trợ lịch lặp lại.\n\nNếu người dùng yêu cầu lịch lặp hằng ngày, hằng tuần hoặc theo chu kỳ:\n\n- status = unsupported\n- intent = unknown\n- requires_confirmation = false\n- user_message giải thích rằng phiên bản hiện tại chưa hỗ trợ lịch lặp\n\nKhông tạo trường recurrence.\n\nYÊU CẦU CUỐI CÙNG\n\n1. Chỉ trả về một đối tượng JSON.\n2. Luôn trả đủ tám trường cấp ngoài.\n3. Không đổi tên trường.\n4. Không thêm trường cấp ngoài mới.\n5. Không trả parsed_json.\n6. Không trả exact_start.\n7. Không trả query_date_end.\n8. Không trả recurrence.\n9. Không trả văn bản ngoài JSON.\n10. Các trường không có dữ liệu phải sử dụng null, false, đối tượng rỗng hoặc danh sách rỗng phù hợp.\n`.trim();\n\n/*\n * JSON Schema cho Gemini Structured Output.\n * Tất cả 8 trường cấp ngoài luôn phải xuất hiện.\n */\nconst responseSchema = {\n  type: 'object',\n  properties: {\n    status: {\n      type: 'string',\n      enum: [\n        'success',\n        'needs_clarification',\n        'unsupported',\n        'error',\n      ],\n    },\n\n    intent: {\n      type: 'string',\n      enum: [\n        'create_event',\n        'find_suitable_time',\n        'view_events',\n        'update_event',\n        'delete_event',\n        'check_availability',\n        'import_schedule_image',\n        'confirm_action',\n        'cancel_action',\n        'unknown',\n      ],\n    },\n\n    event: {\n      type: 'object',\n      properties: {\n        title: {\n          type: 'string',\n          nullable: true,\n        },\n\n        description: {\n          type: 'string',\n          nullable: true,\n        },\n\n        date_range_start: {\n          type: 'string',\n          nullable: true,\n          description: 'Ngày định dạng YYYY-MM-DD.',\n        },\n\n        date_range_end: {\n          type: 'string',\n          nullable: true,\n          description: 'Ngày định dạng YYYY-MM-DD.',\n        },\n\n        specific_start_time: {\n          type: 'string',\n          nullable: true,\n          description: 'Giờ định dạng HH:MM theo 24 giờ.',\n        },\n\n        specific_end_time: {\n          type: 'string',\n          nullable: true,\n          description: 'Giờ định dạng HH:MM theo 24 giờ.',\n        },\n\n        duration_minutes: {\n          type: 'integer',\n          nullable: true,\n          minimum: 1,\n        },\n\n        preferred_period: {\n          type: 'string',\n          nullable: true,\n          enum: [\n            'morning',\n            'afternoon',\n            'evening',\n            'any',\n          ],\n        },\n\n        location: {\n          type: 'string',\n          nullable: true,\n        },\n\n        is_outdoor: {\n          type: 'boolean',\n          nullable: true,\n        },\n\n        avoid_rain: {\n          type: 'boolean',\n        },\n      },\n\n      required: [\n        'title',\n        'description',\n        'date_range_start',\n        'date_range_end',\n        'specific_start_time',\n        'specific_end_time',\n        'duration_minutes',\n        'preferred_period',\n        'location',\n        'is_outdoor',\n        'avoid_rain',\n      ],\n    },\n\n    target_event: {\n      type: 'object',\n      properties: {\n        event_id: {\n          type: 'string',\n          nullable: true,\n        },\n\n        title: {\n          type: 'string',\n          nullable: true,\n        },\n\n        date: {\n          type: 'string',\n          nullable: true,\n          description: 'Ngày định dạng YYYY-MM-DD.',\n        },\n\n        start_time: {\n          type: 'string',\n          nullable: true,\n          description: 'Giờ định dạng HH:MM theo 24 giờ.',\n        },\n      },\n\n      required: [\n        'event_id',\n        'title',\n        'date',\n        'start_time',\n      ],\n    },\n\n    missing_fields: {\n      type: 'array',\n      items: {\n        type: 'string',\n      },\n    },\n\n    clarification_question: {\n      type: 'string',\n      nullable: true,\n    },\n\n    requires_confirmation: {\n      type: 'boolean',\n    },\n\n    user_message: {\n      type: 'string',\n    },\n  },\n\n  required: [\n    'status',\n    'intent',\n    'event',\n    'target_event',\n    'missing_fields',\n    'clarification_question',\n    'requires_confirmation',\n    'user_message',\n  ],\n};\n\n/*\n * Request body gửi đến Gemini Generate Content API.\n */\nconst body = {\n  systemInstruction: {\n    parts: [\n      {\n        text: systemPrompt,\n      },\n    ],\n  },\n\n  contents: [\n    {\n      role: 'user',\n      parts: [\n        {\n          text: userMessage,\n        },\n      ],\n    },\n  ],\n\n  generationConfig: {\n    temperature: 0.1,\n    responseMimeType: 'application/json',\n    responseSchema,\n  },\n};\n\n/*\n * Request body dự phòng cho Groq (định dạng OpenAI-compatible).\n * Groq chỉ có JSON mode nên đính kèm schema vào system prompt.\n */\nconst groqSystem = systemPrompt +\n  '\\n\\nTrả về MỘT đối tượng JSON hợp lệ có đúng các khóa theo schema sau:\\n' +\n  JSON.stringify(responseSchema);\n\nconst groq_body = {\n  model: 'llama-3.3-70b-versatile',\n  temperature: 0.1,\n  max_completion_tokens: 2048,\n  response_format: { type: 'json_object' },\n  messages: [\n    { role: 'system', content: groqSystem },\n    { role: 'user', content: userMessage },\n  ],\n};\n\n/*\n * Dữ liệu đầu ra của Code node.\n */\nreturn [\n  {\n    json: {\n      user_id: String(input.user_id ?? ''),\n      message: userMessage,\n      current_datetime: currentDateTime,\n      current_date: currentDate,\n      current_time: currentTime,\n      weekday,\n      timezone,\n      llm_provider: 'Google',\n      llm_model: 'gemini-3.6-flash',\n      data_contract_version: '0.9',\n      gemini_body: body,\n      groq_body,\n    },\n  },\n];"
+      },
+      "id": "1a92040a-8101-41e1-979d-8d22a9cbd8bf",
+      "name": "Build Gemini Request1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        2256
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{ $json.llm_model }}:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.gemini_body }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "f2594160-1091-4e63-9d8c-a684458d13c1",
+      "name": "Gemini Generate Content1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        816,
+        2272
+      ],
+      "retryOnFail": true,
+      "alwaysOutputData": false,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "uhYyVUB1UEBCjZFa",
+          "name": "Thịnh_Google Gemini(PaLM) Api account 2"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const meta = $('Build Gemini Request1').first().json;\nconst res = $input.first().json;\nconst base = { user_id: meta.user_id, message: meta.message };\n\nconst fail = (msg) => {\n  const parsed = { status: 'error', intent: 'unknown', error_message: msg };\n  return [{ json: { ...base, status: 'error', intent: 'unknown', error_message: msg, parsed_json: parsed } }];\n};\n\nif (res.error) {\n  const em = (e) => (typeof e === 'string' ? e : (e.message || JSON.stringify(e)));\n  let gemErr = null;\n  try { gemErr = $('Gemini Generate Content1').first().json.error || null; } catch (e) {}\n  return fail('Loi goi AI' + (gemErr ? ' (Gemini: ' + em(gemErr) + ')' : '') + ' (Groq: ' + em(res.error) + ')');\n}\n\ntry {\n  const text = ((res?.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('') || String(res?.choices?.[0]?.message?.content || '')).replace(/<think>[\\s\\S]*?<\\/think>/g, '');\n  if (!text) return fail('AI tra ve noi dung rong');\n  const p = JSON.parse(text.replace(/```json|```/g, '').trim());\n\n  // Chuẩn hóa status: Gemini v0.9 trả về 'success' -> đổi thành 'ok' để tương thích Main Orchestrator\n  const rawStatus = p.status || 'error';\n  const status = (rawStatus === 'success' || rawStatus === 'ok') ? 'ok' : rawStatus;\n\n  const event = p.event || {};\n  const today = meta.current_date || new Date().toISOString().slice(0, 10);\n  const addDays = (ymd, n) => new Date(new Date(ymd + 'T00:00:00Z').getTime() + n * 86400000).toISOString().slice(0, 10);\n  const isDate = (s) => typeof s === 'string' && /^\\d{4}-\\d{2}-\\d{2}$/.test(s);\n\n  // Đọc dữ liệu từ đối tượng event theo Data Contract v0.9\n  const title = (event.title && String(event.title).trim()) || String(meta.message || '').slice(0, 100);\n  const duration_minutes = Math.min(480, Math.max(15, Number.parseInt(event.duration_minutes, 10) || 60));\n  const date_range_start = isDate(event.date_range_start) ? event.date_range_start : today;\n  let date_range_end = isDate(event.date_range_end) ? event.date_range_end : addDays(today, 6);\n  if (date_range_end < date_range_start) date_range_end = date_range_start;\n\n  const PERIOD = ['morning', 'afternoon', 'evening', 'any'];\n  const preferred_period = PERIOD.includes(event.preferred_period) ? event.preferred_period : 'any';\n\n  // Chuẩn hóa intent để Main Orchestrator nhận diện luồng sắp xếp lịch\n  let intent = p.intent || 'unknown';\n  if (intent === 'find_suitable_time') {\n    intent = 'create_event'; // Đưa về chung luồng tạo/tìm lịch trống với Main Orchestrator\n  }\n\n  const out = {\n    status: ['ok', 'needs_clarification', 'unsupported', 'error'].includes(status) ? status : 'error',\n    intent: intent,\n    title,\n    duration_minutes,\n    date_range_start,\n    date_range_end,\n    preferred_period,\n    is_outdoor: typeof event.is_outdoor === 'boolean' ? event.is_outdoor : null,\n    avoid_rain: event.avoid_rain === true,\n    location: event.location ? String(event.location) : null,\n    clarification_question: p.clarification_question ? String(p.clarification_question) : null,\n    parsed_json: p\n  };\n\n  return [{ json: { ...base, ...out } }];\n} catch (e) {\n  return fail('Khong parse duoc JSON tu AI: ' + e.message);\n}"
+      },
+      "id": "ed99ce14-7364-4b53-9284-9f5d82cd6d82",
+      "name": "Parse AI Output1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1312,
+        2256
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Build Gemini Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Gemini Request": {
+      "main": [
+        [
+          {
+            "node": "Gemini Generate Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Generate Content": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini OK?": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Output1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Groq Generate Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Generate Content": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Output1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Gemini Request1": {
+      "main": [
+        [
+          {
+            "node": "Gemini Generate Content1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Generate Content1": {
+      "main": [
+        [
+          {
+            "node": "Gemini OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "9A5O940VDtelFnv9",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "7c225ebf-0024-401d-8223-6fdb11f60b79",
+  "meta": {
+    "instanceId": "0846d57beb4a68b7867b288f9e63b7c394398a2c01348a6d35ee9d1584ceebab"
+  },
+  "nodeGroups": [],
+  "id": "dNPd2poWfSJ2tFOJ",
+  "tags": []
+}

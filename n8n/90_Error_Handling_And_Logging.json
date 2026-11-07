@@ -1,0 +1,162 @@
+{
+  "name": "90_Error_Handling_And_Logging",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 90_Error_Handling_And_Logging\n2 cách dùng: (1) gán làm **Error Workflow** (Settings → Error workflow) cho 00–08; (2) gọi tường minh bằng Execute Workflow với `{ source, severity, error_code, message, request_id?, context? }`.\nGhi log nội bộ vào `session_logs` (status `error`) qua WF09 — **không gửi thông báo ra ngoài**. Dữ liệu nhạy cảm (key, token, base64 ảnh…) bị che; chuỗi dài bị cắt.\nKhông đặt WF90 làm error workflow của chính nó (tránh vòng lặp).",
+        "height": 250,
+        "width": 640
+      },
+      "id": "fdfcca7a-c070-43ac-8f12-1982ef2747ec",
+      "name": "Ghi chú",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "1c12bb00-a64a-468e-ab46-9c644096a712",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        32,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "9cbe1331-ddce-4ea9-b6c4-b7b7cdc74eb0",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        32,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst SENSITIVE = /(api[_-]?key|token|authorization|password|secret|cookie|image_base64|base64)/i;\nconst scrub = (s) => String(s).replace(/AIza[0-9A-Za-z_\\-]{20,}/g, '[REDACTED]').replace(/Bearer\\s+[A-Za-z0-9._\\-]+/gi, 'Bearer [REDACTED]');\nconst clean = (v, depth = 0) => {\n  if (v === null || v === undefined) return v;\n  if (typeof v === 'string') { const s = scrub(v); return s.length > 500 ? s.slice(0, 500) + '...[cat ' + s.length + ' ky tu]' : s; }\n  if (typeof v !== 'object') return v;\n  if (depth >= 4) return '[...]';\n  if (Array.isArray(v)) return v.slice(0, 10).map((x) => clean(x, depth + 1));\n  const out = {};\n  for (const [k, val] of Object.entries(v)) out[k] = SENSITIVE.test(k) ? '[REDACTED]' : clean(val, depth + 1);\n  return out;\n};\n\nlet n;\nif (j.execution && j.workflow) {            // goi boi Error Trigger\n  const e = j.execution;\n  n = {\n    source: j.workflow.name || 'unknown', source_workflow_id: j.workflow.id || null, execution_id: e.id || null,\n    failed_node: e.lastNodeExecuted || null, severity: 'error', error_code: 'WORKFLOW_EXECUTION_ERROR',\n    message: (e.error && e.error.message) || 'Loi khong ro', request_id: null,\n    context: { mode: e.mode || null, url: e.url || null, stack: e.error && e.error.stack ? String(e.error.stack).split('\\n').slice(0, 5).join('\\n') : null }\n  };\n} else {                                    // goi tuong minh\n  const rid = Number(j.request_id);\n  n = {\n    source: j.source || 'unknown', source_workflow_id: j.source_workflow_id || null, execution_id: j.execution_id || null,\n    failed_node: j.failed_node || null, severity: ['info', 'warning', 'error', 'critical'].includes(j.severity) ? j.severity : 'error',\n    error_code: j.error_code || 'EXPLICIT_ERROR', message: j.message || 'Loi khong ro',\n    request_id: Number.isInteger(rid) && rid > 0 ? rid : null, context: j.context || null\n  };\n}\nn.message = scrub(n.message).slice(0, 2000);\nn.context = clean(n.context);\nreturn [{ json: {\n  operation: 'log_session',\n  data: {\n    request_id: n.request_id, user_command: 'system_error:' + n.source,\n    ai_analysis_json: { severity: n.severity, error_code: n.error_code, source_workflow_id: n.source_workflow_id, execution_id: n.execution_id, failed_node: n.failed_node, context: n.context },\n    status: 'error', error_message: '[' + n.error_code + '] ' + n.message\n  },\n  normalized: n\n} }];"
+      },
+      "id": "fde8e6aa-f945-43b8-8418-3c2a3bdbdd4a",
+      "name": "Normalize Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "Thj3ieGa3ie2v0hX",
+          "mode": "id",
+          "cachedResultUrl": "/workflow/Thj3ieGa3ie2v0hX"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "51113dc7-859e-4ff8-974b-7dfe7aac7688",
+      "name": "Call 09 - Log Session",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        528,
+        624
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const n = $('Normalize Error').first().json.normalized;\nconst r = $input.first().json;\nconst logged = !!(r && r.success === true);\nreturn [{ json: { logged, log_id: logged && r.rows[0] ? r.rows[0].id : null, source: n.source, error_code: n.error_code, severity: n.severity, execution_id: n.execution_id, log_error: logged ? null : (r && r.error ? String(r.error) : 'Khong ghi duoc session_logs') } }];"
+      },
+      "id": "362e764d-a5ac-4169-9700-b73ad87f84e1",
+      "name": "Build Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        624
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Error": {
+      "main": [
+        [
+          {
+            "node": "Call 09 - Log Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 09 - Log Session": {
+      "main": [
+        [
+          {
+            "node": "Build Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "962f39e9-a6d3-4044-ac50-5ed1999e0130",
+  "meta": {
+    "instanceId": "0846d57beb4a68b7867b288f9e63b7c394398a2c01348a6d35ee9d1584ceebab"
+  },
+  "nodeGroups": [],
+  "id": "9A5O940VDtelFnv9",
+  "tags": []
+}
