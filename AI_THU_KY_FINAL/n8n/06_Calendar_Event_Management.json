@@ -1,5 +1,0 @@
-{"name":"06_Calendar_Event_Management","nodes":[
-{"parameters":{"inputSource":"passthrough"},"id":"wf06-trigger","name":"Execute Workflow Trigger","type":"n8n-nodes-base.executeWorkflowTrigger","typeVersion":1.1,"position":[0,0]},
-{"parameters":{"jsCode":"const x=$input.first().json; if(!['get','update','delete'].includes(x.operation)||!x.event_id) throw new Error('operation and event_id are required'); return [{json:x}];"},"id":"wf06-validate","name":"Validate Event Operation","type":"n8n-nodes-base.code","typeVersion":2,"position":[240,0]},
-{"parameters":{"jsCode":"return [{json:{success:true,operation:$json.operation,event_id:$json.event_id,note:'Route this validated request to the corresponding Google Calendar node in n8n.'}}];"},"id":"wf06-route","name":"Calendar Operation Contract","type":"n8n-nodes-base.code","typeVersion":2,"position":[500,0]}
-],"connections":{"Execute Workflow Trigger":{"main":[[{"node":"Validate Event Operation","type":"main","index":0}]]},"Validate Event Operation":{"main":[[{"node":"Calendar Operation Contract","type":"main","index":0}]]}},"active":false,"settings":{"executionOrder":"v1"},"pinData":{},"tags":[]}

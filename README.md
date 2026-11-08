@@ -1,51 +1,26 @@
-# AI Secretary – bản đã chỉnh sửa
+# AI Thư Ký - Scheduling Engine
 
-## Cấu trúc
-- `app.py`: điểm vào ứng dụng.
-- `navigation.py`: thanh tiến trình có thể bấm, khóa các bước chưa mở.
-- `pages/1_main_input.py`: màn hình nhập yêu cầu.
-- `pages/2_review_edit.py`: màn hình kiểm tra/chỉnh sửa.
-- `pages/3_suggest_slots.py`: màn hình chọn giờ.
-- `scheduling/`: engine sinh candidate, lọc hard constraint, xếp hạng cá nhân hóa
-  và adapter Google Calendar/PostgreSQL.
-- `pages/confirm_action.py`: hộp thoại xác nhận.
+Bản phát hành này tách rõ trách nhiệm:
 
-## Chạy
-Cài thư viện nếu máy chưa có:
-```bash
-pip install streamlit pandas requests
-```
-Chạy tại thư mục chứa `app.py`:
-```bash
-streamlit run app.py
+- n8n Cloud điều phối, gọi Gemini, Google Calendar, thời tiết và SQL Server.
+- Python chỉ nhận dữ liệu đã tổng hợp, sinh ứng viên, kiểm tra ràng buộc, tính điểm và xếp hạng.
+- Python không kết nối Google Calendar, SQL Server hoặc gửi thông báo.
+
+## Chạy API
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn api:app --host 0.0.0.0 --port 8000
 ```
 
-## Scheduling engine
+Kiểm tra `GET /health`. n8n Cloud cần gọi một URL HTTPS công khai có xác thực ở lớp reverse proxy/API gateway; `localhost` trên máy cá nhân không thể được n8n Cloud truy cập trực tiếp.
 
-Màn hình chọn giờ ưu tiên đọc các sự kiện bận từ tất cả Google Calendar mà tài khoản
-được xem, sau đó lọc xung đột/khoảng nghỉ và xếp hạng theo thói quen, buổi ưu tiên,
-tải trong ngày, thời tiết và độ ổn định. Nếu chưa cấu hình Google Calendar, ứng dụng
-hiển thị cảnh báo và dùng dữ liệu demo thay vì giả vờ dữ liệu là lịch thật.
+## API
 
-Để kết nối tài khoản test, đặt các biến môi trường sau (không commit secret):
+`POST /schedule/optimize` nhận contract trong [DATA_CONTRACT.md](./DATA_CONTRACT.md). Tất cả datetime nên có offset; datetime không có offset được hiểu theo `Asia/Ho_Chi_Minh`.
 
-```text
-GOOGLE_CALENDAR_CREDENTIALS=C:\path\outside\repository\credentials.json
-GOOGLE_CALENDAR_TOKEN=C:\path\outside\repository\token.json
-DATABASE_URL=postgresql://...
-```
+## SQL Server và Google Calendar
 
-`credentials.json` là OAuth Desktop Client của Google Calendar. Lần chạy đầu sẽ mở
-trình duyệt để cấp quyền và lưu token ở đường dẫn `GOOGLE_CALENDAR_TOKEN`. PostgreSQL
-dùng bảng `scheduling_feedback` để lưu hành vi chọn, từ chối, đổi và hủy slot.
-
-## Quy tắc điều hướng
-- Bước 1 luôn truy cập được.
-- Bước 2 chỉ mở sau khi màn hình 1 nhận phản hồi thành công từ webhook.
-- Bước 3 chỉ mở sau khi xác nhận ở màn hình 2 và màn hình 2 chuyển tiếp.
-- Bước 4 hiện là nhãn trạng thái hoàn tất, không phải trang độc lập trong bộ mã hiện tại.
-
-## Lưu ý
-- Giữ nguyên URL webhook và payload n8n có trong mã gốc.
-- Các dữ liệu demo, lựa chọn sidebar demo và một số phần xử lý nghiệp vụ vẫn theo mã gốc.
-- `app.py` trước đây trỏ sai tên `pages/main_input.py`; bản này đã thống nhất với `pages/1_main_input.py`.
+Các workflow final giữ credential reference của n8n, không chứa secret. Với SQL Server cục bộ, dùng VPN/tunnel HTTPS hoặc triển khai SQL Server/API adapter ở mạng riêng có allowlist, TLS, xác thực và giới hạn quyền. Không expose cổng SQL trực tiếp ra Internet.
