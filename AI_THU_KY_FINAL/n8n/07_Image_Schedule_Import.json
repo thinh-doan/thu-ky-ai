@@ -1,4 +1,0 @@
-{"name":"07_Image_Schedule_Import","nodes":[
-{"parameters":{"inputSource":"passthrough"},"id":"wf07-trigger","name":"Execute Workflow Trigger","type":"n8n-nodes-base.executeWorkflowTrigger","typeVersion":1.1,"position":[0,0]},
-{"parameters":{"jsCode":"return [{json:{success:false,enabled:false,message:'Image schedule import is retained for future use and is not part of the scheduling path.'}}];"},"id":"wf07-disabled","name":"Not In Main Scheduling Flow","type":"n8n-nodes-base.code","typeVersion":2,"position":[260,0]}
-],"connections":{"Execute Workflow Trigger":{"main":[[{"node":"Not In Main Scheduling Flow","type":"main","index":0}]]}},"active":false,"settings":{"executionOrder":"v1"},"pinData":{},"tags":[]}

@@ -1,4 +1,0 @@
-{"name":"09_Data_Store_Adapter","nodes":[
-{"parameters":{"inputSource":"passthrough"},"id":"wf09-trigger","name":"Execute Workflow Trigger","type":"n8n-nodes-base.executeWorkflowTrigger","typeVersion":1.1,"position":[0,0]},
-{"parameters":{"jsCode":"const x=$input.first().json; const allowed=['get_user_profile','save_request','save_suggestions','save_confirmation','save_event','log_session']; if(!allowed.includes(x.operation)) throw new Error('Unsupported data operation'); return [{json:{...x,sql_dialect:'mssql',note:'Use Microsoft SQL node with parameterized queries and existing schema.'}}];"},"id":"wf09-contract","name":"SQL Server Data Contract","type":"n8n-nodes-base.code","typeVersion":2,"position":[300,0]}
-],"connections":{"Execute Workflow Trigger":{"main":[[{"node":"SQL Server Data Contract","type":"main","index":0}]]}},"active":false,"settings":{"executionOrder":"v1"},"pinData":{},"tags":[]}
