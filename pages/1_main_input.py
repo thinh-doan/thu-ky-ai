@@ -9,14 +9,22 @@ Giao diện dựa vào `status` để quyết định hiển thị:
   unsupported         -> hiển thị user_message và dừng
   error               -> hiển thị thông báo lỗi
   requires_confirmation = true -> hiển thị nút Xác nhận và Hủy
+
+Khớp WF00 (Main Request Orchestrator):
+  - Workflow trả lỗi nghiệp vụ dưới dạng status="error" + error_code (NEEDS_CLARIFICATION, UNSUPPORTED_REQUEST...);
+    hàm normalize_response() đổi về đúng status mà giao diện đang dùng.
+  - Văn bản -> proposals_ready  -> sang màn 3;  Ảnh -> import_ready -> sang màn 2.
+  - "Tùy chọn thêm" được ghép thành câu tiếng Việt gắn vào `message` (WF00 chỉ chuyển `message` cho AI Parse).
+  - Nếu n8n không phản hồi: hiện lỗi và dùng dữ liệu mẫu (SAMPLE + radio demo) để xem trước giao diện.
 """
-import time
 import streamlit as st
 import requests
 import base64
 from navigation import render_stepper, stepper_css
 
-N8N_WEBHOOK_URL = "https://k25416-thukyai.app.n8n.cloud/webhook/ai-secretary"
+N8N_WEBHOOK_URL = "https://aithuky.app.n8n.cloud/webhook/ai-secretary"
+USER_ID = "student@gmail.com"
+N8N_TIMEOUT = 120  # AI + lịch + thời tiết + chấm điểm có thể mất hơn 30 giây
 
 st.set_page_config(page_title="AI Secretary · Yêu cầu", page_icon="🗓️", layout="wide")
 
@@ -97,11 +105,96 @@ def set_text(prompt):
 
 
 def reset():
-    for k in ("request_text", "pref_tod", "pref_avoid", "resp", "request_kind", "answered"):
+    for k in ("request_text", "pref_tod", "pref_avoid", "pref_buffer", "pref_rain", "resp", "request_kind",
+              "answered", "base_message", "demo_resp", "last_submit", "clarify_ans"):
         st.session_state.pop(k, None)
 
 
 ss = st.session_state
+
+WEEKDAY_TEXT = {"Thứ 2": "thứ hai", "Thứ 3": "thứ ba", "Thứ 4": "thứ tư", "Thứ 5": "thứ năm",
+                "Thứ 6": "thứ sáu", "Thứ 7": "thứ bảy", "Chủ nhật": "chủ nhật"}
+
+
+def build_message(text):
+    """Ghép "Tùy chọn thêm" thành câu tiếng Việt gắn vào cuối yêu cầu (WF00 chỉ chuyển `message` cho AI Parse)."""
+    parts = [text.strip()]
+    tod = ss.get("pref_tod") or []
+    if tod:
+        parts.append("Ưu tiên buổi " + ", ".join(t.lower() for t in tod) + ".")
+    avoid = ss.get("pref_avoid") or []
+    if avoid:
+        parts.append("Tránh các ngày " + ", ".join(WEEKDAY_TEXT.get(d, d.lower()) for d in avoid) + ".")
+    if ss.get("pref_rain"):
+        parts.append("Tránh lúc trời mưa.")
+    return " ".join(parts)
+
+
+def unwrap_response(data):
+    """n8n có thể trả [ {...} ], {"body": {...}} hoặc {"response": {...}} -> luôn lấy ra dict nội dung."""
+    if isinstance(data, list) and data:
+        data = data[0]
+    if isinstance(data, dict) and "body" in data:
+        data = data["body"]
+        if isinstance(data, list) and data:
+            data = data[0]
+    if isinstance(data, dict) and isinstance(data.get("response"), dict):
+        data = data["response"]
+    return data
+
+
+def normalize_response(data):
+    """Đưa phản hồi WF00 về các status giao diện đang dùng.
+    WF00 báo lỗi nghiệp vụ bằng status="error" + error_code; riêng hai mã dưới đây có màn hình riêng."""
+    if not isinstance(data, dict):
+        return {"status": "error", "intent": "unknown", "user_message": "Phản hồi không hợp lệ từ n8n."}
+    if data.get("status") == "error":
+        code = data.get("error_code")
+        if code == "NEEDS_CLARIFICATION":
+            return {**data, "status": "needs_clarification",
+                    "clarification_question": data.get("clarification_question") or data.get("message")}
+        if code == "UNSUPPORTED_REQUEST":
+            return {**data, "status": "unsupported"}
+    return data
+
+
+def use_sample(kind):
+    """Dự phòng khi n8n không phản hồi: dùng dữ liệu mẫu theo radio demo để xem trước giao diện."""
+    ss.resp = SAMPLE["image"] if kind == "image" else SAMPLE[demo]
+    ss.request_kind = kind
+    ss.demo_resp = True
+    ss.pop("answered", None)
+
+
+def submit(kind, payload):
+    """Gửi payload sang WF00. Thành công + đúng trạng thái -> chuyển trang. Trả True nếu nhận được phản hồi hợp lệ."""
+    ss.last_submit = (kind, payload)
+    with st.status("AI đang xử lý qua Workflow n8n...", expanded=True) as stt:
+        try:
+            res = requests.post(N8N_WEBHOOK_URL, json=payload, timeout=N8N_TIMEOUT)
+            if res.status_code != 200:
+                stt.update(label="Lỗi xử lý!", state="error")
+                st.error(f"Lỗi n8n ({res.status_code}): {res.text}")
+                use_sample(kind)
+                return False
+            data = normalize_response(unwrap_response(res.json()))
+        except Exception as e:
+            stt.update(label="Lỗi kết nối!", state="error")
+            st.error(f"Không thể kết nối đến Webhook n8n: {e}")
+            use_sample(kind)
+            return False
+        stt.update(label="Đã phân tích xong!", state="complete")
+    ss.resp = data
+    ss.request_kind = kind
+    ss.demo_resp = False
+    ss.pop("answered", None)
+    status = data.get("status")
+    if kind == "image" and status == "import_ready":
+        st.switch_page("pages/2_review_edit.py")
+    elif kind == "text" and status == "proposals_ready":
+        st.switch_page("pages/3_suggest_slots.py")
+    return True
+
 
 # ----------------------------- Sidebar ----------------------------- #
 with st.sidebar:
@@ -116,7 +209,7 @@ with st.sidebar:
                     ["success", "needs_clarification", "unsupported", "error"],
                     help="Chọn trạng thái để xem giao diện hiển thị tương ứng. Với ảnh, luôn mô phỏng success.")
     st.button("🔄 Làm lại từ đầu", on_click=reset)
-    st.caption("Ứng dụng không lưu dữ liệu. Sự kiện chỉ nằm trong Google Calendar.")
+    st.caption("Sự kiện nằm trong Google Calendar. Ứng dụng chỉ lưu cục bộ danh sách sự kiện chờ ghi nhận kết quả.")
 
 # ----------------------------- Main ----------------------------- #
 st.markdown('<div class="hero"><h2>🗓️ AI Secretary</h2><p>Hãy cho tôi biết cần sắp xếp gì, tôi sẽ tìm thời gian phù hợp.</p></div>',
@@ -152,8 +245,8 @@ with st.expander("▸ Tùy chọn thêm"):
     c1.multiselect("Buổi ưu tiên", ["Sáng", "Chiều", "Tối"], key="pref_tod")
     c2.multiselect("Ngày muốn tránh", ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ nhật"],
                    key="pref_avoid")
-    c1.number_input("Khoảng nghỉ giữa các sự kiện (phút)", 0, 120, 15, step=5)
-    c2.checkbox("Tránh lúc trời mưa (kiểm tra thời tiết)")
+    c1.number_input("Khoảng nghỉ giữa các sự kiện (phút)", 0, 120, 15, step=5, key="pref_buffer")
+    c2.checkbox("Tránh lúc trời mưa (kiểm tra thời tiết)", key="pref_rain")
 
 # ----------------------------- Actions ----------------------------- #
 if go_text or go_img:
@@ -161,82 +254,27 @@ if go_text or go_img:
         st.warning("Vui lòng nhập yêu cầu hoặc tải ảnh lên trước.")
     elif go_img and up is None:
         st.warning("Vui lòng nhập yêu cầu hoặc tải ảnh lên trước.")
+    elif go_text:
+        ss.base_message = ss.get("request_text", "").strip()  # màn 3 dùng để "Gợi ý lại"
+        message = build_message(ss.base_message)
+        submit("text", {
+            "action": "submit_request",
+            "user_id": USER_ID,
+            "user_email": USER_ID,
+            "message": message,
+            "prompt": message,
+        })
     else:
-        with st.status(
-            "AI đang xử lý qua Workflow n8n...", expanded=True
-        ) as stt:
-            try:
-                if go_text:
-                    # Bổ sung đúng tên trường user_id và message mà n8n yêu cầu
-                    payload = {
-                        "action": "submit_request",
-                        "user_id": "student@gmail.com",  # Thêm user_id cho n8n validate
-                        "message": ss.get(
-                            "request_text"
-                        ),  # Thêm message theo đúng yêu cầu n8n
-                        "prompt": ss.get("request_text"),
-                        "user_email": "student@gmail.com",
-                    }
-                    res = requests.post(
-                        N8N_WEBHOOK_URL, json=payload, timeout=30
-                    )
-
-                # MÃ MỚI ĐÃ SỬA CHUẨN
-                elif go_img:
-                    # 1. Chuyển đổi file ảnh sang dạng mã hóa Base64
-                    bytes_data = up.getvalue()
-                    base64_image = base64.b64encode(bytes_data).decode("utf-8")
-
-                    # 2. Lấy MIME type của file ảnh (tự động fallback về image/jpeg nếu rỗng)
-                    mime_type = (
-                        up.type
-                        if (up and hasattr(up, "type") and up.type)
-                        else "image/jpeg"
-                    )
-
-                    # 3. Đóng gói dữ liệu JSON chứa đầy đủ image_base64 và mime_type
-                    payload = {
-                        "action": "submit_image",
-                        "user_id": "student@gmail.com",
-                        "user_email": "student@gmail.com",
-                        "message": "Tải ảnh thời khóa biểu",
-                        "image_base64": base64_image,
-                        "mime_type": mime_type,
-                    }
-
-                    # 4. Gửi request dưới dạng JSON payload
-                    res = requests.post(
-                        N8N_WEBHOOK_URL, json=payload, timeout=30
-                    )
-
-                if res.status_code == 200:
-                    stt.update(label="Đã phân tích xong!", state="complete")
-                    data = res.json()
-
-                    # Nếu n8n trả về danh sách [ {...} ], tự động lấy phần tử đầu tiên
-                    if isinstance(data, list) and len(data) > 0:
-                        data = data[0]
-
-                    # Nếu dữ liệu bọc trong trường 'body'
-                    if isinstance(data, dict) and "body" in data:
-                        data = data["body"]
-
-                    if isinstance(data, dict) and isinstance(data.get("response"), dict):
-                        data = data["response"]
-                    ss.resp = data
-                    ss.request_kind = "image" if go_img else "text"
-                    ss.pop("answered", None)
-                    response_status = data.get("status") if isinstance(data, dict) else None
-                    if go_img and response_status in ("import_ready", "success", "ok"):
-                        st.switch_page("pages/2_review_edit.py")
-                    elif go_text and response_status in ("proposals_ready", "success", "ok"):
-                        st.switch_page("pages/3_suggest_slots.py")
-                else:
-                    stt.update(label="Lỗi xử lý!", state="error")
-                    st.error(f"Lỗi n8n ({res.status_code}): {res.text}")
-            except Exception as e:
-                stt.update(label="Lỗi kết nối!", state="error")
-                st.error(f"Không thể kết nối đến Webhook n8n: {e}")
+        bytes_data = up.getvalue()
+        mime_type = up.type if (hasattr(up, "type") and up.type) else "image/jpeg"
+        submit("image", {
+            "action": "submit_image",
+            "user_id": USER_ID,
+            "user_email": USER_ID,
+            "message": "Tải ảnh thời khóa biểu",
+            "image_base64": base64.b64encode(bytes_data).decode("utf-8"),
+            "mime_type": mime_type,
+        })
 
 # ----------------------------- Hiển thị theo status ----------------------------- #
 resp = ss.get("resp")
@@ -246,6 +284,8 @@ if resp:
     intent_val = resp.get("intent", "unknown") if isinstance(resp, dict) else "unknown"
 
     st.divider()
+    if ss.get("demo_resp"):
+        st.caption("🧪 Dữ liệu mẫu (không nhận được phản hồi từ n8n) · xem trước giao diện theo radio demo.")
     st.caption("Kết quả phân tích · Ý định: **" + INTENT_LABELS.get(intent_val, intent_val) + "**")
 
     # Lấy thông điệp người dùng an toàn (tìm theo user_message, message hoặc error)
@@ -310,7 +350,8 @@ if resp:
             "clarification_question", "Cần thêm thông tin để xử lý."
         )
         st.warning(cq)
-        st.caption(msg)
+        if msg and msg != cq:
+            st.caption(msg)
         ans = st.text_input(
             "Câu trả lời của bạn",
             key="clarify_ans",
@@ -319,6 +360,12 @@ if resp:
         if st.button("Gửi câu trả lời", type="primary"):
             if ans.strip():
                 st.toast("Đã gửi, AI sẽ phân tích lại", icon="📨")
+                base = (ss.get("base_message") or ss.get("request_text") or "").strip()
+                ss.base_message = (base + " " + ans.strip()).strip()
+                message = build_message(ss.base_message)
+                if submit("text", {"action": "submit_request", "user_id": USER_ID, "user_email": USER_ID,
+                                   "message": message, "prompt": message}):
+                    st.rerun()
             else:
                 st.warning("Vui lòng nhập câu trả lời.")
 
@@ -331,5 +378,8 @@ if resp:
 
     else:  # error hoặc trạng thái khác
         st.error(msg)
-        st.button("🔁 Thử lại")
+        if st.button("🔁 Thử lại") and ss.get("last_submit"):
+            kind_retry, payload_retry = ss.last_submit
+            if submit(kind_retry, payload_retry):
+                st.rerun()
         st.stop()

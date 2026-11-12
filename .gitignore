@@ -1,3 +1,7 @@
-workflows/
-_pycache_
-credentials.json
+__pycache__/
+*.py[cod]
+file_aithuky_claude/
+
+cloudflared.exe
+
+n8n/

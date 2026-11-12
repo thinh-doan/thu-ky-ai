@@ -1,0 +1,29 @@
+[
+  {
+    "user_id": "student@gmail.com",
+    "google_event_id": "aisec3s3",
+    "title": "Đặt lịch gặp khách hàng lúc 14 giờ ngày 25/11/2026. 1 tiếng",
+    "start_time": "2026-11-25 16:00:00",
+    "end_time": "2026-11-25 17:00:00",
+    "status": "pending",
+    "created_at": "2026-11-08 13:46:50"
+  },
+  {
+    "user_id": "student@gmail.com",
+    "google_event_id": "aisec6s2",
+    "title": "Tìm cho tôi một giờ chạy bộ tại Công viên Gia Định trong tuần sau, ưu tiên buổi chiều và tránh lúc m",
+    "start_time": "2026-11-09 12:00:00",
+    "end_time": "2026-11-09 13:00:00",
+    "status": "pending",
+    "created_at": "2026-11-08 15:06:21"
+  },
+  {
+    "user_id": "student@gmail.com",
+    "google_event_id": "aisec6s3",
+    "title": "Tìm cho tôi một giờ chạy bộ tại Công viên Gia Định trong tuần sau, ưu tiên buổi chiều và tránh lúc m",
+    "start_time": "2026-11-10 12:00:00",
+    "end_time": "2026-11-10 13:00:00",
+    "status": "pending",
+    "created_at": "2026-11-08 15:09:12"
+  }
+]
