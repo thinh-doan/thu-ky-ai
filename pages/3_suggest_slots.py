@@ -1,18 +1,26 @@
 """MÀN HÌNH 3 - Gợi ý khung giờ trống, chọn lịch Google Calendar và tạo sự kiện.
 
-Chạy:  streamlit run 3_suggest_slots.py
+Chạy:  streamlit run 1_main_input.py   (trang nằm trong pages/)
+
+Khớp workflow:
+  - Gợi ý lấy HOÀN TOÀN từ `proposals` của WF04 (top 3 S1..S3, đã chấm điểm theo buổi, thời tiết, khoảng nghỉ,
+    nghỉ ngơi và thói quen học từ WF10). Không còn package `scheduling`.
+  - Có proposals thật -> tạo lịch theo slot (request_id + selected_slot_code): WF05 khóa slot, kiểm tra xung đột,
+    tạo Google Calendar. Trùng lịch (slot_taken) -> cho chọn lịch cần thay thế (replace_conflict).
+  - Không có proposals (xem trước / dữ liệu mẫu) -> giữ dữ liệu mẫu FLEX/FIXED và tạo theo lô `events[]` như cũ.
+  - "Gợi ý lại" gửi lại yêu cầu gốc kèm điều kiện ở khung bên trái để WF00 chạy lại pipeline.
+  - Sau khi tạo thành công, sự kiện được lưu vào outcome_store để ghi nhận kết quả ở pages/4_record_outcome.py (WF10).
 """
-import time
 from datetime import date, datetime, timedelta
 import requests
 import streamlit as st
 from pages.confirm_action import confirm_action
 from navigation import render_stepper, stepper_css
-from scheduling.models import SchedulingRequest, UserProfile
-from scheduling.repository import PostgresRepository
-from scheduling.service import SchedulingService
+from outcome_store import add_events, parse_local, unwrap
 
-N8N_WEBHOOK_URL = "https://k25416-thukyai.app.n8n.cloud/webhook/ai-secretary"
+N8N_WEBHOOK_URL = "https://aithuky.app.n8n.cloud/webhook/ai-secretary"
+USER_ID = "student@gmail.com"
+N8N_TIMEOUT = 120
 
 st.set_page_config(page_title="AI Secretary · Chọn giờ", page_icon="🗓️", layout="wide")
 
@@ -45,26 +53,14 @@ WINDOWS = {"Morning": [8, 9, 10, 11], "Afternoon": [13, 14, 15, 16], "Evening": 
 WINDOW_VN = {"Morning": "Buổi sáng", "Afternoon": "Buổi chiều", "Evening": "Buổi tối"}
 BUSY = {("Wed", 9), ("Thu", 13)}
 MAX_SLOTS = 3
+BREAKDOWN_VN = {"period": "Đúng buổi", "weather": "Thời tiết", "buffer": "Khoảng nghỉ", "rest": "Nghỉ ngơi",
+                "habit": "Hợp thói quen"}
 
 FLEX = [
     ("Học: Ôn thi cơ sở dữ liệu", 120, "Cao", False),
     ("Họp nhóm dự án", 90, "Trung bình", False),
     ("Chạy bộ ở Công viên Gia Định", 60, "Thấp", True)
 ]
-BACKEND_RESPONSE = st.session_state.get("resp", {})
-BACKEND_PROPOSALS = (
-    BACKEND_RESPONSE.get("proposals", [])
-    if st.session_state.get("request_kind") == "text"
-    and isinstance(BACKEND_RESPONSE, dict)
-    else []
-)
-if BACKEND_PROPOSALS:
-    FLEX = [(
-        BACKEND_RESPONSE.get("title", "Sự kiện"),
-        int(BACKEND_RESPONSE.get("duration_minutes") or 60),
-        "AI đề xuất",
-        bool(BACKEND_RESPONSE.get("avoid_rain", False)),
-    )]
 FIXED = [
     ("Toán cao cấp", 0, "07:30", "09:30", None),
     ("Vật lý", 1, "09:00", "11:00", "Lịch nha sĩ 09:00"),
@@ -78,130 +74,120 @@ today = date.today()
 ss.setdefault("cons", {"start": today, "end": today + timedelta(days=6), "tod": ["Morning"],
                        "avoid": ["Sun"], "buffer": 15})
 ss.setdefault("seed", 0)
-ss.setdefault("calendar_source", "demo")
-ss.setdefault("calendar_warning", None)
-ss.setdefault("calendar_busy_events", None)
-ss.setdefault("user_profile", None)
 
 
-def _request_for(title, minutes, event_type="personal"):
+def day_key(d):
+    """Mon..Sun, không phụ thuộc locale của máy."""
+    return DAYS[d.weekday()]
+
+
+def _constraint_text():
+    """Điều kiện ở khung bên trái -> câu tiếng Việt gắn vào yêu cầu gốc khi gợi ý lại."""
     c = ss.cons
-    preferred_periods = {
-        "Morning": "morning",
-        "Afternoon": "afternoon",
-        "Evening": "evening",
-    }
-    selected_periods = [
-        preferred_periods[period]
-        for period in c["tod"]
-        if period in preferred_periods
-    ]
-    return SchedulingRequest(
-        title=title,
-        duration_minutes=minutes,
-        start_date=c["start"],
-        end_date=c["end"],
-        preferred_period=selected_periods[0] if len(selected_periods) == 1 else "any",
-        event_type=event_type,
-        min_buffer_minutes=c["buffer"],
-        max_results=max(MAX_SLOTS * 4, 12),
-    )
+    parts = [f"Tìm trong khoảng từ ngày {c['start']:%d/%m/%Y} đến ngày {c['end']:%d/%m/%Y}"]
+    if c["tod"]:
+        parts.append("ưu tiên " + ", ".join(WINDOW_VN[t].lower() for t in c["tod"]))
+    if c["avoid"]:
+        parts.append("tránh " + ", ".join(DAY_VN[d].lower() for d in c["avoid"]))
+    return ". ".join(parts) + "."
 
 
-def _get_profile():
-    if ss.user_profile is not None:
-        return ss.user_profile
-    default = UserProfile(
-        habit_hours={"study": (9.0, 14.0), "personal": (17.0, 19.0)}
-    )
-    repository = PostgresRepository()
-    if repository.configured:
-        repository.ensure_schema()
-        stored = repository.load_profile("student@gmail.com")
-        ss.user_profile = UserProfile(
-            habit_hours={**default.habit_hours, **stored.habit_hours},
-            reschedule_rate=stored.reschedule_rate,
-        )
+def _resubmit():
+    """Gợi ý lại: gửi lại yêu cầu gốc + điều kiện mới cho WF00 (chạy lại AI parse -> lịch trống -> thời tiết -> chấm điểm)."""
+    base = (ss.get("base_message") or "").strip()
+    if not base:
+        ss.regen_error = "Không còn yêu cầu gốc; hãy quay lại Màn hình 1 để nhập lại."
+        return
+    message = f"{base} {_constraint_text()}"
+    try:
+        with st.spinner("Đang lấy gợi ý mới từ n8n..."):
+            res = requests.post(N8N_WEBHOOK_URL, timeout=N8N_TIMEOUT, json={
+                "action": "submit_request", "user_id": USER_ID, "user_email": USER_ID,
+                "message": message, "prompt": message,
+            })
+        if res.status_code != 200:
+            ss.regen_error = f"Lỗi n8n ({res.status_code}): {res.text}"
+            return
+        data = unwrap(res.json())
+    except Exception as e:
+        ss.regen_error = f"Không thể kết nối đến Webhook n8n: {e}"
+        return
+    if isinstance(data, dict) and data.get("status") == "proposals_ready":
+        ss.resp = data
+        ss.request_kind = "text"
+        st.toast("Đã cập nhật gợi ý", icon="🔄")
     else:
-        ss.user_profile = default
-    return ss.user_profile
+        msg = (data.get("message") or data.get("user_message")) if isinstance(data, dict) else None
+        ss.regen_error = msg or "Không lấy được gợi ý mới."
 
 
-def _load_calendar_events():
-    if ss.calendar_busy_events is not None:
-        return ss.calendar_busy_events
-    request = _request_for("availability check", 30)
-    service = SchedulingService(profile=_get_profile())
-    busy, source, warning = service.get_busy_events(request)
-    if warning:
-        ss.calendar_source = "demo"
-        ss.calendar_warning = warning
-        ss.calendar_busy_events = []
-        return []
-    ss.calendar_source = source
-    ss.calendar_warning = None
-    ss.calendar_busy_events = busy
-    return busy
+if ss.pop("regen_pending", False):
+    _resubmit()
+
+BACKEND_RESPONSE = ss.get("resp", {})
+BACKEND_PROPOSALS = (
+    BACKEND_RESPONSE.get("proposals", [])
+    if ss.get("request_kind") == "text"
+    and isinstance(BACKEND_RESPONSE, dict)
+    else []
+)
+REAL = bool(BACKEND_PROPOSALS)  # có proposals thật từ WF04 -> chạy theo workflow; ngược lại là xem trước dữ liệu mẫu
+if REAL:
+    FLEX = [(
+        BACKEND_RESPONSE.get("title") or "Sự kiện",
+        int(BACKEND_RESPONSE.get("duration_minutes") or 60),
+        "AI đề xuất",
+        bool(BACKEND_RESPONSE.get("avoid_rain", False)),
+    )]
+
+
+def _reasons(p):
+    """Lý do hiển thị cho một proposal của WF04: điểm, các tiêu chí tốt, cảnh báo mưa."""
+    ok, warn = [], []
+    if p.get("score") is not None:
+        try:
+            ok.append(f"Điểm phù hợp: {float(p['score']):.0f}/100")
+        except (TypeError, ValueError):
+            ok.append(f"Điểm phù hợp: {p['score']}")
+    bd = p.get("score_breakdown") or {}
+    for key, label in BREAKDOWN_VN.items():
+        v = bd.get(key)
+        if isinstance(v, (int, float)) and v >= 80:
+            ok.append(f"{label} tốt ({v:.0f})")
+    rp = p.get("rain_probability")
+    if p.get("is_suitable") is False:
+        warn.append(f"🌧 Xác suất mưa cao ({rp}%)" if rp is not None else "🌧 Có thể mưa")
+    elif rp is not None and BACKEND_RESPONSE.get("avoid_rain"):
+        ok.append(f"Xác suất mưa {rp}%")
+    return ok, warn
 
 
 def make_slots(idx, n):
-    if BACKEND_PROPOSALS:
-        _load_calendar_events()
-    if BACKEND_PROPOSALS and ss.calendar_source != "google_calendar":
+    if REAL:
         slots = []
-        for proposal in BACKEND_PROPOSALS[:n]:
-            try:
-                start = datetime.fromisoformat(proposal["start_time"].replace("Z", "+00:00"))
-                end = datetime.fromisoformat(proposal["end_time"].replace("Z", "+00:00"))
-            except (KeyError, TypeError, ValueError):
+        for p in BACKEND_PROPOSALS:
+            start, end = parse_local(p.get("start_time")), parse_local(p.get("end_time"))
+            if not start or not end or day_key(start) in ss.cons["avoid"]:
                 continue
+            ok, warn = _reasons(p)
             slots.append({
                 "day": start.date(),
                 "start": start.hour + start.minute / 60,
                 "end": end.hour + end.minute / 60,
-                "reasons": [f"Điểm phù hợp: {proposal.get('score', 'N/A')}"],
-                "rainy": False,
+                "reasons": ok,
+                "warns": warn,
+                "rainy": p.get("is_suitable") is False,
                 "minutes": int((end - start).total_seconds() // 60),
-                "slot_code": proposal.get("slot_code"),
+                "slot_code": p.get("slot_code"),
+                "score": p.get("score"),
             })
-        return slots
+        return slots[:n]
     c = ss.cons
-    request = _request_for(FLEX[idx][0], FLEX[idx][1], "study" if idx == 0 else "personal")
-    busy_events = _load_calendar_events()
-    if ss.calendar_source == "google_calendar":
-        service = SchedulingService(profile=_get_profile())
-        result = service.recommend(request, busy_events)
-        allowed_periods = {
-            "Morning": range(6, 12),
-            "Afternoon": range(12, 18),
-            "Evening": range(18, 22),
-        }
-        allowed_hours = {
-            hour
-            for period in (c["tod"] or list(WINDOWS))
-            for hour in allowed_periods.get(period, ())
-        }
-        return [
-            {
-                "day": slot.start.date(),
-                "start": slot.start.hour + slot.start.minute / 60,
-                "end": slot.end.hour + slot.end.minute / 60,
-                "reasons": list(slot.reasons),
-                "rainy": False,
-                "minutes": int((slot.end - slot.start).total_seconds() // 60),
-                "slot_code": slot.slot_code,
-                "score": slot.score,
-                "score_breakdown": slot.score_breakdown,
-            }
-            for slot in result.slots
-            if slot.start.strftime("%a") not in c["avoid"]
-            and slot.start.hour in allowed_hours
-        ][:n]
     hours = [h for t in (c["tod"] or list(WINDOWS)) for h in WINDOWS[t]]
     minutes = FLEX[idx][1]
     slots, day = [], max(c["start"], today)
     while len(slots) < n and day <= c["end"]:
-        wd = day.strftime("%a")
+        wd = day_key(day)
         if wd not in c["avoid"]:
             for step in range(len(hours)):
                 h = hours[(idx + day.toordinal() + ss.seed + step) % len(hours)]
@@ -215,18 +201,22 @@ def make_slots(idx, n):
                     reasons.append("Trước hạn chót")
                 rainy = FLEX[idx][3] and (day.toordinal() + step) % 4 == 0
                 slots.append(
-                    {"day": day, "start": h, "end": end_h, "reasons": reasons, "rainy": rainy, "minutes": minutes})
+                    {"day": day, "start": h, "end": end_h, "reasons": reasons, "warns": [], "rainy": rainy,
+                     "minutes": minutes})
                 break
         day += timedelta(days=1)
     return slots
 
 
 def fmt_time(x):
-    return f"{int(x):02d}:{int(round((x % 1) * 60)):02d}"
+    h, m = int(x), int(round((x % 1) * 60))
+    if m == 60:
+        h, m = h + 1, 0
+    return f"{h:02d}:{m:02d}"
 
 
 def fmt(slot):
-    return f"{DAY_VN[slot['day'].strftime('%a')]} {slot['day']:%d/%m} · {fmt_time(slot['start'])}–{fmt_time(slot['end'])}"
+    return f"{DAY_VN[day_key(slot['day'])]} {slot['day']:%d/%m} · {fmt_time(slot['start'])}–{fmt_time(slot['end'])}"
 
 
 def regenerate():
@@ -234,28 +224,23 @@ def regenerate():
                "end": ss.c_dates[1] if len(ss.c_dates) == 2 else today + timedelta(days=6),
                "tod": ss.c_tod, "avoid": ss.c_avoid, "buffer": ss.c_buffer}
     ss.seed += 1
-    ss.calendar_busy_events = None
-    ss.calendar_source = "demo"
-    ss.calendar_warning = None
-    st.toast("Đã cập nhật gợi ý", icon="🔄")
+    if REAL:
+        ss.regen_pending = True  # gửi lại WF00 ở lần chạy kế tiếp (đầu trang)
+    else:
+        st.toast("Đã cập nhật gợi ý", icon="🔄")
 
 
 def reset():
-    for k in ("results", "reconnected", "celebrated"):
+    for k in ("results", "reconnected", "celebrated", "conflict_ctx", "registered"):
         ss.pop(k, None)
 
 
-def persist_selected_feedback(events):
-    repository = PostgresRepository()
-    if not repository.configured:
-        return
-    repository.ensure_schema()
-    for event in events:
-        start = datetime.fromisoformat(
-            f"{event['date_range_start']}T{event['specific_start_time']}"
-        )
-        event_type = "study" if event["title"].startswith("Học:") else "personal"
-        repository.record_feedback("student@gmail.com", event_type, start, "accepted")
+def register_outcomes(events):
+    """Phương án C: lưu sự kiện vừa tạo để ghi nhận kết quả sau (WF10). Chỉ nhận phần tử có google_event_id."""
+    try:
+        ss.registered = ss.get("registered", 0) + add_events(USER_ID, events)
+    except OSError as e:
+        st.warning(f"Không lưu được danh sách ghi nhận kết quả: {e}")
 
 
 # ----------------------------- Sidebar ----------------------------- #
@@ -267,7 +252,53 @@ with st.sidebar:
 st.markdown(
     '<div class="hero"><h2>🗓️ AI Secretary</h2><p>Chọn khung giờ bạn thích, tôi sẽ thêm vào Google Calendar sau khi bạn xác nhận.</p></div>',
     unsafe_allow_html=True)
-render_stepper(3)
+render_stepper(4 if "results" in ss else 3)
+
+
+# ----------------------------- Gửi yêu cầu tạo lịch ----------------------------- #
+def post_n8n(payload):
+    res = requests.post(N8N_WEBHOOK_URL, json=payload, timeout=N8N_TIMEOUT)
+    if res.status_code != 200:
+        raise RuntimeError(res.text or f"HTTP {res.status_code}")
+    data = unwrap(res.json())
+    return data if isinstance(data, dict) else {"status": "error", "message": str(data)}
+
+
+def handle_single(data, title, when, ctx):
+    """Phản hồi WF05 theo slot: created | slot_taken | error."""
+    status = data.get("status")
+    if status == "created":
+        ev = data.get("event") or {}
+        ss.results = [{"title": title, "when": when, "ok": True, "err": ""}]
+        ss.pop("conflict_ctx", None)
+        register_outcomes([{"google_event_id": ev.get("google_event_id"), "title": ev.get("title") or title,
+                            "start_time": ev.get("start_time"), "end_time": ev.get("end_time")}])
+        return
+    ss.results = [{"title": title, "when": when, "ok": False,
+                   "err": data.get("message") or "Không tạo được sự kiện"}]
+    if status == "slot_taken" and data.get("conflicts"):
+        ss.conflict_ctx = {**ctx, "conflicts": data["conflicts"], "title": title, "when": when}
+    else:
+        ss.pop("conflict_ctx", None)
+
+
+def handle_batch(data, items, events_payload):
+    """Phản hồi WF05 theo lô: results[] cùng thứ tự với events[]."""
+    per_event = data.get("results")
+    if isinstance(per_event, list) and len(per_event) == len(items):
+        ss.results = []
+        to_register = []
+        for (t, w), r in zip(items, per_event):
+            ok = r.get("status") == "created"
+            ss.results.append({"title": t, "when": w, "ok": ok,
+                               "err": "" if ok else r.get("message", "Không tạo được sự kiện")})
+            if ok and r.get("saved_to_db") is not False:  # chỉ sự kiện đã lưu CSDL mới ghi nhận kết quả được
+                to_register.append({"google_event_id": r.get("google_event_id"), "title": r.get("title") or t,
+                                    "start_time": r.get("start_time"), "end_time": r.get("end_time")})
+        register_outcomes(to_register)
+    else:
+        err_msg = data.get("message", "Phản hồi không hợp lệ từ n8n")
+        ss.results = [{"title": t, "when": w, "ok": False, "err": err_msg} for t, w in items]
 
 
 # ----------------------------- Màn hình kết quả ----------------------------- #
@@ -292,7 +323,40 @@ def show_result():
             else:
                 c1.markdown(f"❌ **{r['title']}** · {r['when']}")
                 c1.caption(r["err"])
+
+    # Trùng lịch (WF05 slot_taken): cho chọn lịch cần thay thế rồi gửi replace_conflict
+    ctx = ss.get("conflict_ctx")
+    if ctx and ctx.get("conflicts"):
+        conflicts = ctx["conflicts"]
+
+        def _label(c):
+            s = parse_local(c.get("start_time"))
+            return f"{c.get('title', '(không tiêu đề)')} · {s:%d/%m %H:%M}" if s else c.get("title", "")
+
+        with st.container(border=True):
+            st.markdown("**⚠ Khung giờ này đang trùng với lịch khác**")
+            pick = st.radio("Chọn lịch muốn thay thế", range(len(conflicts)), key="conflict_pick",
+                            format_func=lambda i: _label(conflicts[i]))
+            kq_rep = confirm_action(
+                st.button("🔁 Thay thế lịch trùng", key="replace_btn"), key="replace",
+                message=f"Xóa **{_label(conflicts[pick])}** và tạo **{ctx['title']}** · {ctx['when']}?")
+            if kq_rep == "yes":
+                try:
+                    with st.spinner("Đang thay thế lịch..."):
+                        data = post_n8n({
+                            "action": "confirm_action", "confirm_action": "replace_conflict",
+                            "sub_action": "replace_conflict", "user_id": USER_ID, "user_email": USER_ID,
+                            "request_id": ctx["request_id"], "selected_slot_code": ctx["slot_code"],
+                            "delete_event_id": conflicts[pick].get("event_id"),
+                        })
+                    handle_single(data, ctx["title"], ctx["when"], ctx)
+                    ss.pop("celebrated", None)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Lỗi kết nối n8n: {e}")
     st.info("Mở Google Calendar để xem, sửa hoặc xóa sự kiện.")
+    if ss.get("registered"):
+        st.page_link("pages/4_record_outcome.py", label="📝 Ghi nhận kết quả khi sự kiện diễn ra")
     c1, c2, _ = st.columns([1.9, 1.7, 3])
     c1.button("➕ Sắp xếp lịch khác", type="primary", on_click=reset)
     c2.link_button("Mở Google Calendar", "https://calendar.google.com")
@@ -304,14 +368,17 @@ if "results" in ss:
 
 # ----------------------------- Màn hình chọn giờ ----------------------------- #
 st.subheader("Chọn khung giờ bạn thích")
-st.caption(f"Đã kiểm tra Google Calendar từ {ss.cons['start']:%d/%m} đến {ss.cons['end']:%d/%m}.")
-if ss.calendar_warning:
-    st.warning(
-        "Chưa đọc được Google Calendar; đang dùng dữ liệu demo để minh họa. "
-        f"Chi tiết: {ss.calendar_warning}"
-    )
-elif ss.calendar_source == "google_calendar":
-    st.success("Đã đọc lịch bận từ tất cả Google Calendar mà tài khoản có quyền xem.")
+if REAL:
+    loc = BACKEND_RESPONSE.get("location_used")
+    st.caption("Gợi ý từ AI Secretary dựa trên Google Calendar, thời tiết và thói quen của bạn."
+               + (f" Địa điểm kiểm tra thời tiết: {loc}." if loc else ""))
+    for w in BACKEND_RESPONSE.get("warnings") or []:
+        st.info(w.get("message", str(w)) if isinstance(w, dict) else str(w))
+else:
+    st.caption(f"Đã kiểm tra Google Calendar từ {ss.cons['start']:%d/%m} đến {ss.cons['end']:%d/%m}. "
+               "(Dữ liệu mẫu: chưa có gợi ý từ n8n.)")
+if ss.get("regen_error"):
+    st.warning(ss.pop("regen_error"))
 
 left, right = st.columns([1, 2.3])
 
@@ -357,28 +424,34 @@ with right:
                     "slot_code": s.get("slot_code"),
                 })
                 tags = "".join(f"<span class='tag ok'>✔ {r}</span>" for r in s["reasons"])
+                tags += "".join(f"<span class='tag warn'>{w}</span>" for w in s.get("warns", []))
                 st.markdown(tags, unsafe_allow_html=True)
             else:
                 skipped += 1
 
     with st.container(border=True):
         st.markdown("**🏫 Sự kiện cố định** (kiểm tra xung đột)")
+        if REAL:
+            st.caption("Dữ liệu mẫu để xem giao diện — không được tạo trên Google Calendar khi đang dùng gợi ý thật.")
         monday = today - timedelta(days=today.weekday())
         for j, (title, off, s, e, conflict) in enumerate(FIXED):
             d = monday + timedelta(days=off + (7 if monday + timedelta(days=off) < today else 0))
             c1, c2 = st.columns([3, 2])
-            c1.markdown(f"**{title}** · {DAY_VN[d.strftime('%a')]} {d:%d/%m} {s}–{e}")
+            c1.markdown(f"**{title}** · {DAY_VN[day_key(d)]} {d:%d/%m} {s}–{e}")
             if conflict:
                 c2.markdown(f"<span class='tag warn'>⚠ Trùng với {conflict}</span>", unsafe_allow_html=True)
                 pick = st.radio("Xử lý xung đột", ["Vẫn giữ", "Bỏ qua"], horizontal=True, key=f"fx{j}",
                                 label_visibility="collapsed")
                 if pick == "Bỏ qua":
-                    skipped += 1
+                    if not REAL:
+                        skipped += 1
                     continue
             else:
                 c2.markdown("<span class='tag ok'>✅ Không xung đột</span>", unsafe_allow_html=True)
 
-            items.append((title, f"{DAY_VN[d.strftime('%a')]} {d:%d/%m} · {s}–{e}"))
+            if REAL:
+                continue  # dữ liệu mẫu: không đưa vào danh sách tạo lịch thật
+            items.append((title, f"{DAY_VN[day_key(d)]} {d:%d/%m} · {s}–{e}"))
             events_payload.append({
                 "title": title,
                 "date_range_start": d.strftime("%Y-%m-%d"),
@@ -398,7 +471,8 @@ with right:
 
 # ----------------------------- Nút hành động ----------------------------- #
 b1, b2, _, b3 = st.columns([1, 1, 2, 2.4])
-b1.button("← Quay lại")
+if b1.button("← Quay lại"):
+    st.switch_page("1_main_input.py")
 b2.button("❌ Hủy", key="cancel_all")
 summary = (f"Tạo **{len(items)} sự kiện** trên Google Calendar?\n\n"
            + "\n".join(f"- **{t}** · {w}" for t, w in items))
@@ -411,48 +485,31 @@ if ss.get("cancel_all") or kq == "no":
 if kq == "yes":
     bar = st.progress(0.0, text="Đang gửi yêu cầu tạo lịch tới n8n...")
 
+    request_id = BACKEND_RESPONSE.get("request_id") if isinstance(BACKEND_RESPONSE, dict) else None
+    by_slot = REAL and isinstance(request_id, int) and len(events_payload) == 1 and events_payload[0].get("slot_code")
     payload = {
         "action": "confirm_action",
         "confirm_action": "create",
         "sub_action": "create",
-        "user_id": "student@gmail.com",
-        "user_email": "student@gmail.com",
-        "request_id": BACKEND_RESPONSE.get("request_id", 1) if isinstance(BACKEND_RESPONSE, dict) else 1,
-        "selected_slot_code": events_payload[0].get("slot_code", "S1") if events_payload else "S1",
-        "events": events_payload,
-        "selected_slots": [{"title": t, "when": w} for t, w in items]
+        "user_id": USER_ID,
+        "user_email": USER_ID,
+        "selected_slots": [{"title": t, "when": w} for t, w in items],
     }
-
-
+    if by_slot:
+        # Tạo theo slot đã lưu của WF04: WF05 khóa slot (chống bấm trùng), kiểm tra xung đột, tạo Google Calendar
+        payload.update({"request_id": request_id, "selected_slot_code": events_payload[0]["slot_code"]})
+    else:
+        payload.update({"events": events_payload, "request_id": request_id if isinstance(request_id, int) else 1,
+                        "selected_slot_code": (events_payload[0].get("slot_code") if events_payload else None) or "S1"})
 
     try:
-        res = requests.post(N8N_WEBHOOK_URL, json=payload, timeout=30)
+        data = post_n8n(payload)
         bar.progress(1.0, text="Hoàn tất!")
-
-        if res.status_code == 200:
-            resp_data = res.json()
-            if isinstance(resp_data, list) and len(resp_data) > 0:
-                resp_data = resp_data[0]
-            if isinstance(resp_data, dict) and "body" in resp_data:
-                resp_data = resp_data["body"]
-
-            per_event = resp_data.get("results") if isinstance(resp_data, dict) else None
-            if isinstance(per_event, list) and len(per_event) == len(items):
-                ss.results = []
-                for (t, w), r in zip(items, per_event):
-                    ok = r.get("status") == "created"
-                    ss.results.append({"title": t, "when": w, "ok": ok,
-                                       "err": "" if ok else r.get("message", "Không tạo được sự kiện")})
-                if all(result["ok"] for result in ss.results):
-                    persist_selected_feedback(events_payload)
-            else:
-                err_msg = resp_data.get("message", "Phản hồi không hợp lệ từ n8n") if isinstance(resp_data,
-                                                                                                 dict) else str(
-                    resp_data)
-                ss.results = [{"title": t, "when": w, "ok": False, "err": err_msg} for t, w in items]
+        if by_slot:
+            handle_single(data, items[0][0], items[0][1],
+                          {"request_id": request_id, "slot_code": events_payload[0]["slot_code"]})
         else:
-            ss.results = [{"title": t, "when": w, "ok": False, "err": res.text} for t, w in items]
-
+            handle_batch(data, items, events_payload)
         st.rerun()
     except Exception as e:
         st.error(f"Lỗi kết nối n8n: {e}")
